@@ -1,0 +1,32 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+    function role(roleName) {
+      return signedIn() && get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role == roleName;
+    }
+
+    match /roles/{userId} {
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow write: if role('admin');
+    }
+
+    match /users/{docId} {
+      allow read: if signedIn();
+      allow write: if role('admin');
+    }
+
+    match /nurses/{docId} {
+      allow read: if signedIn();
+      allow write: if role('admin');
+    }
+
+    match /confirmed_schedules/{docId} {
+      allow read: if signedIn();
+      allow create, update: if role('admin') || (role('nurse') && request.resource.data.nurseId == request.auth.uid);
+      allow delete: if role('admin');
+    }
+  }
+}

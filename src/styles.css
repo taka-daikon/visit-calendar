@@ -1,0 +1,68 @@
+:root {
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #102a43;
+  background: #f5f7fb;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input, select, textarea { font: inherit; }
+textarea, input, select { width: 100%; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px 12px; background: white; }
+button { border: 1px solid #cbd5e1; background: white; border-radius: 10px; padding: 10px 14px; cursor: pointer; }
+button.primary { background: #2563eb; color: white; border-color: #2563eb; }
+button:hover { opacity: 0.95; }
+
+.app-shell { padding: 20px; display: grid; gap: 20px; }
+.card { background: white; border-radius: 18px; border: 1px solid #e2e8f0; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06); }
+.panel { padding: 18px; }
+.toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 20px; }
+.toolbar h1 { margin: 0 0 6px; font-size: 28px; }
+.toolbar p { margin: 0; color: #486581; }
+.toolbar-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.toolbar-actions.left { justify-content: flex-start; }
+.main-grid { display: grid; grid-template-columns: 420px minmax(0, 1fr); gap: 20px; align-items: start; }
+.sidebar, .content { display: grid; gap: 16px; }
+.stats-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.stats-grid.two-col { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
+.stat-card { background: linear-gradient(135deg, #eff6ff, #ffffff); border-radius: 16px; padding: 16px; border: 1px solid #dbeafe; display: grid; gap: 8px; }
+.stat-card span { color: #486581; font-size: 13px; }
+.stat-card strong { font-size: 28px; }
+.field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.compact-list { display: grid; gap: 10px; }
+.scrollable-list { max-height: 420px; overflow: auto; }
+.mini-card, .visit-card { background: #f8fafc; border-radius: 14px; padding: 12px; border: 1px solid #e2e8f0; }
+.visit-card { border-left: 8px solid #cbd5e1; }
+.split-line { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.badge { border-radius: 999px; padding: 4px 10px; font-size: 12px; }
+.empty { color: #7b8794; }
+.warning-list { margin: 0; padding-left: 18px; color: #9b1c1c; }
+.report-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+.report-table th, .report-table td { padding: 10px; border-bottom: 1px solid #e2e8f0; text-align: left; }
+.route-list { margin: 12px 0 0; padding-left: 18px; }
+.note-card p { margin: 0; line-height: 1.7; }
+.calendar-grid { display: grid; gap: 10px; }
+.month-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.week-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.day-grid { grid-template-columns: minmax(0, 1fr); }
+.calendar-cell { min-height: 220px; border: 1px solid #dbe2ea; border-radius: 16px; padding: 12px; display: grid; gap: 10px; align-content: start; }
+.calendar-cell.muted { opacity: 0.55; }
+.calendar-section { display: grid; gap: 6px; }
+.section-title { font-size: 12px; color: #486581; text-transform: uppercase; letter-spacing: 0.04em; }
+.calendar-item { background: rgba(255,255,255,0.92); border-radius: 10px; padding: 8px; border-left: 6px solid #cbd5e1; font-size: 13px; display: flex; justify-content: space-between; gap: 8px; }
+.calendar-item button { padding: 2px 8px; border-radius: 8px; }
+.confirmed-zone { border-top: 1px dashed #cbd5e1; padding-top: 8px; }
+.status-overdue, .danger { border-color: #fecaca; background: #fff1f2; }
+.status-warning, .warning { border-color: #fde68a; background: #fffbeb; }
+.status-normal { border-color: #bbf7d0; background: #f0fdf4; }
+.status-needs-base-date { border-color: #cbd5e1; background: #f8fafc; }
+.danger-text { color: #b91c1c; }
+
+@media (max-width: 1200px) {
+  .main-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 800px) {
+  .toolbar { flex-direction: column; align-items: flex-start; }
+  .field-grid, .month-grid, .week-grid { grid-template-columns: 1fr; }
+}
+
+.warning-text { color: #9a6700; }
