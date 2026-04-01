@@ -19,6 +19,7 @@ import { downloadTextFile, printHtml } from './services/persistence';
 import { signIn, signOutUser, subscribeAuth } from './services/firebaseAuth';
 import { applyFilters, buildCandidateVisits, getAreaColors, getUnscheduledCandidates, groupByDate } from './utils/calendar';
 import { parseCsv } from './utils/csv';
+import { parseNurseCsv } from './utils/nurseCsv';
 import { START_MONTH, START_YEAR, addMonths, formatDateKey, formatMonthLabel, getVisibleDays } from './utils/date';
 import { suggestOptimizedRoute } from './utils/mapsRouteService';
 import { buildDocumentDeadlines, buildMonthlyReport, buildReviewAlerts, monthlyReportToCsv } from './utils/report';
@@ -120,6 +121,18 @@ export default function App() {
     if (!file) return;
     const text = await file.text();
     await applyCsvText(text);
+  };
+
+  const applyNurseCsvText = async (text: string) => {
+    const parsed = parseNurseCsv(text);
+    setNurses(parsed);
+    await nurseRepo.clear();
+    await Promise.all(parsed.map((nurse) => nurseRepo.upsert(nurse)));
+  };
+
+  const handleNurseCsvFile = async (file: File) => {
+    const text = await file.text();
+    await applyNurseCsvText(text);
   };
 
   const handleDropVisit = async () => {
@@ -281,7 +294,7 @@ export default function App() {
             onSignOut={handleSignOut}
           />
           <FiltersPanel filters={filters} areas={areaList} onChange={setFilters} />
-          <NurseMasterPanel nurses={nurses} onToggleActive={handleToggleNurse} onAdd={handleAddNurse} />
+          <NurseMasterPanel nurses={nurses} onToggleActive={handleToggleNurse} onAdd={handleAddNurse} onImportCsv={handleNurseCsvFile} />
           <AlertsPanel alerts={alerts} />
           <DocumentsDashboard items={documents} />
           <ConflictWarningsPanel warnings={warnings} />

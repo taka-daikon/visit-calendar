@@ -5,6 +5,7 @@ interface Props {
   nurses: Nurse[];
   onToggleActive: (id: string) => void;
   onAdd: (nurse: Omit<Nurse, 'id'>) => void;
+  onImportCsv: (file: File) => void;
 }
 
 const defaultDraft: Omit<Nurse, 'id'> = {
@@ -19,7 +20,7 @@ const defaultDraft: Omit<Nurse, 'id'> = {
   areas: []
 };
 
-export function NurseMasterPanel({ nurses, onToggleActive, onAdd }: Props) {
+export function NurseMasterPanel({ nurses, onToggleActive, onAdd, onImportCsv }: Props) {
   const [draft, setDraft] = useState(defaultDraft);
 
   return (
@@ -47,7 +48,10 @@ export function NurseMasterPanel({ nurses, onToggleActive, onAdd }: Props) {
         <label>エリア<input value={draft.areas.join(',')} onChange={(e) => setDraft({ ...draft, areas: e.target.value.split(',').map((v) => v.trim()).filter(Boolean) })} placeholder="岡山市北区,岡山市中区" /></label>
         <label>スキル<input value={draft.skills.join(',')} onChange={(e) => setDraft({ ...draft, skills: e.target.value.split(',').map((v) => v.trim()).filter(Boolean) })} placeholder="褥瘡処置,清潔ケア" /></label>
       </div>
-      <button className="primary" onClick={() => { if (!draft.name.trim()) return; onAdd(draft); setDraft(defaultDraft); }}>看護師を追加</button>
+      <div className="toolbar-actions left">
+        <button className="primary" onClick={() => { if (!draft.name.trim()) return; onAdd(draft); setDraft(defaultDraft); }}>看護師を追加</button>
+        <input type="file" accept=".csv,text/csv" onChange={(e) => { const file = e.target.files?.[0]; if (file) onImportCsv(file); e.currentTarget.value = ''; }} />
+      </div>
     </section>
   );
 }
