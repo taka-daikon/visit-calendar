@@ -9,6 +9,30 @@ function overlaps(a: { startMinutes: number; endMinutes: number }, b: { startMin
   return a.startMinutes < b.endMinutes && b.startMinutes < a.endMinutes;
 }
 
+function withinRange(range: string, visit: CandidateVisit | ScheduledVisit): boolean {
+  const [start, end] = range.split('-').map((value) => value.trim());
+  if (!start || !end) return false;
+  const startMinutes = timeToMinutes(start);
+  const endMinutes = timeToMinutes(end);
+  return visit.startMinutes >= startMinutes && visit.endMinutes <= endMinutes;
+}
+
+function nurseAvailableOnDate(nurse: Nurse, visit: CandidateVisit): boolean {
+  const dayKey = `${new Date(visit.dateKey).getDate()}日`;
+  const monthlyAvailability = nurse.monthlyAvailability ?? {};
+  const hasMonthlyRules = Object.keys(monthlyAvailability).length > 0;
+  const targetMonth = nurse.monthlyAvailabilityMonth?.trim();
+  const visitMonth = visit.dateKey.slice(0, 7);
+
+  if (hasMonthlyRules && (!targetMonth || targetMonth === visitMonth)) {
+    const range = monthlyAvailability[dayKey];
+    if (!range) return false;
+    return range.split('|').some((item) => withinRange(item.trim(), visit));
+  }
+
+  return true;
+}
+
 function haversineKm(aArea: string, bArea: string): number {
   const a = AREA_COORDS[aArea];
   const b = AREA_COORDS[bArea];
@@ -35,6 +59,7 @@ export function autoAssignNurse(
     const shift = visitShift(visit);
     if (!nurse.shiftAvailability[shift]) return false;
     if (!visit.requiredSkills.every((skill) => nurse.skills.includes(skill) || nurse.skills.includes('基本看護'))) return false;
+    if (!nurseAvailableOnDate(nurse, visit)) return false;
 
     const sameDayVisits = scheduledVisits.filter((item) => item.nurseId === nurse.id && item.dateKey === visit.dateKey);
     if (sameDayVisits.length >= nurse.maxVisitsPerDay) return false;

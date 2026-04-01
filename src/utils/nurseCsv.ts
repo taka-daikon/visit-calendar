@@ -1,6 +1,7 @@
 import { Nurse, NurseGender, EmploymentType, WeekdayJa } from '../types';
 
 const WEEKDAYS: WeekdayJa[] = ['日曜', '月曜', '火曜', '水曜', '木曜', '金曜', '土曜'];
+const DAY_COLUMNS = Array.from({ length: 31 }, (_, index) => `${index + 1}日`);
 
 function parseCsvLine(line: string): string[] {
   const result: string[] = [];
@@ -56,6 +57,12 @@ export function parseNurseCsv(text: string): Nurse[] {
       .map((value) => value.trim())
       .filter(Boolean);
 
+    const monthlyAvailability = DAY_COLUMNS.reduce<Record<string, string>>((acc, column) => {
+      const value = (record[column] || '').trim();
+      if (value) acc[column] = value;
+      return acc;
+    }, {});
+
     return {
       id: `nurse-${index + 1}`,
       name: record['氏名'] || `看護師${index + 1}`,
@@ -69,7 +76,9 @@ export function parseNurseCsv(text: string): Nurse[] {
         午後: toBool(record['午後可'], true)
       },
       skills: skills.length ? skills : ['基本看護'],
-      areas: areas.length ? areas : ['岡山市北区']
+      areas: areas.length ? areas : ['岡山市北区'],
+      monthlyAvailabilityMonth: (record['対象年月'] || '').trim(),
+      monthlyAvailability
     } satisfies Nurse;
   });
 }

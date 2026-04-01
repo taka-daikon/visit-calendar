@@ -37,6 +37,9 @@ export function NurseMasterPanel({ nurses, onToggleActive, onAdd, onImportCsv }:
             <div>勤務: {nurse.workingWeekdays.join('・')} / 午前:{nurse.shiftAvailability.午前 ? '可' : '不可'} / 午後:{nurse.shiftAvailability.午後 ? '可' : '不可'}</div>
             <div>スキル: {nurse.skills.join(' / ')}</div>
             <div>エリア: {nurse.areas.join(' / ')}</div>
+            {nurse.monthlyAvailabilityMonth && nurse.monthlyAvailability && Object.keys(nurse.monthlyAvailability).length > 0 && (
+              <div>個別希望: {nurse.monthlyAvailabilityMonth} / {Object.entries(nurse.monthlyAvailability).slice(0, 4).map(([day, time]) => `${day} ${time}`).join('、')}{Object.keys(nurse.monthlyAvailability).length > 4 ? '…' : ''}</div>
+            )}
           </article>
         ))}
       </div>

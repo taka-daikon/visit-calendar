@@ -78,6 +78,8 @@ export interface Nurse {
   };
   skills: string[];
   areas: string[];
+  monthlyAvailabilityMonth?: string;
+  monthlyAvailability?: Record<string, string>;
 }
 
 export interface Filters {
