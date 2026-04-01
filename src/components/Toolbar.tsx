@@ -8,10 +8,9 @@ interface ToolbarProps {
   onNext: () => void;
   onExportCsv: () => void;
   onExportPdf: () => void;
-  onSeedDemo: () => void;
 }
 
-export function Toolbar({ periodLabel, viewMode, onChangeViewMode, onPrev, onNext, onExportCsv, onExportPdf, onSeedDemo }: ToolbarProps) {
+export function Toolbar({ periodLabel, viewMode, onChangeViewMode, onPrev, onNext, onExportCsv, onExportPdf }: ToolbarProps) {
   return (
     <header className="toolbar card">
       <div>
@@ -28,7 +27,6 @@ export function Toolbar({ periodLabel, viewMode, onChangeViewMode, onPrev, onNex
         </select>
         <button onClick={onExportCsv}>CSV出力</button>
         <button onClick={onExportPdf}>PDF出力</button>
-        <button className="primary" onClick={onSeedDemo}>デモ投入</button>
       </div>
     </header>
   );

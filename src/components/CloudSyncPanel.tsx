@@ -14,9 +14,9 @@ interface Props {
 export function CloudSyncPanel({ authUser, syncState, email, password, onChangeEmail, onChangePassword, onSignIn, onSignOut }: Props) {
   return (
     <section className="card panel">
-      <h2>Firebase 完全運用版</h2>
-      <p>同期方式: <strong>{syncState.provider}</strong> / 状態: <strong>{syncState.connected ? '接続中' : 'ローカル'}</strong></p>
-      {syncState.provider === 'demo' && <p className="warning-text">デモモードです。ダミーキーのままでも確認でき、 demo-admin@example.com または demo-nurse@example.com でログインできます。</p>}
+      <h2>アカウント / 同期状態</h2>
+      <p>同期方式: <strong>{syncState.provider}</strong> / 状態: <strong>{syncState.connected ? '接続中' : '未接続'}</strong></p>
+      {syncState.provider === 'demo' && <p className="warning-text">現在はデモモードです。本番運用では Firebase 接続と実アカウントを使用してください。</p>}
       {syncState.error && <p className="danger-text">{syncState.error}</p>}
       {authUser ? (
         <div className="mini-card">
@@ -26,12 +26,12 @@ export function CloudSyncPanel({ authUser, syncState, email, password, onChangeE
         </div>
       ) : (
         <div className="field-grid">
-          <label>メール<input value={email} onChange={(e) => onChangeEmail(e.target.value)} placeholder="demo-admin@example.com" /></label>
-          <label>パスワード<input type="password" value={password} onChange={(e) => onChangePassword(e.target.value)} placeholder="任意（デモ時は自由）" /></label>
+          <label>メール<input value={email} onChange={(e) => onChangeEmail(e.target.value)} placeholder="admin@example.com" /></label>
+          <label>パスワード<input type="password" value={password} onChange={(e) => onChangePassword(e.target.value)} placeholder="パスワードを入力" /></label>
           <button className="primary" onClick={onSignIn}>サインイン</button>
         </div>
       )}
-      <small>Firestore ルールで admin / nurse を分離し、confirmed_schedules・users・nurses をリアルタイム同期します。デモモードでは localStorage ベースで疑似同期します。</small>
+      <small>ログイン後に、利用者・看護師・確定スケジュールを Firebase 上で管理します。</small>
     </section>
   );
 }

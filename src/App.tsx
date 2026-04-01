@@ -14,7 +14,7 @@ import { Toolbar } from './components/Toolbar';
 import { sampleCsv } from './data/sampleCsv';
 import { sampleNurses } from './data/sampleNurses';
 import { createNurseRepo, createScheduleRepo, createUserRepo } from './services/repository';
-import { currentSyncProvider } from './services/appEnv';
+import { currentSyncProvider, isDemoMode } from './services/appEnv';
 import { downloadTextFile, printHtml } from './services/persistence';
 import { signIn, signOutUser, subscribeAuth } from './services/firebaseAuth';
 import { applyFilters, buildCandidateVisits, getAreaColors, getUnscheduledCandidates, groupByDate } from './utils/calendar';
@@ -34,7 +34,7 @@ const nurseRepo = createNurseRepo();
 const scheduleRepo = createScheduleRepo();
 
 export default function App() {
-  const [csvText, setCsvText] = useState(sampleCsv);
+  const [csvText, setCsvText] = useState(isDemoMode() ? sampleCsv : '');
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [nurses, setNurses] = useState<Nurse[]>([]);
   const [scheduledMap, setScheduledMap] = useState<Record<string, ScheduledVisit>>({});
@@ -77,6 +77,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!authUser || !isDemoMode()) return;
     if (!users.length) {
       const parsed = parseCsv(sampleCsv);
       setUsers(parsed);
@@ -86,7 +87,7 @@ export default function App() {
       setNurses(sampleNurses);
       sampleNurses.forEach((item) => { nurseRepo.upsert(item); });
     }
-  }, [users.length, nurses.length]);
+  }, [authUser, users.length, nurses.length]);
 
   const visibleDays = useMemo(() => getVisibleDays(currentDate, viewMode), [currentDate, viewMode]);
   const areaList = useMemo(() => Array.from(new Set(users.map((user) => user.居住地))).sort((a, b) => a.localeCompare(b, 'ja')), [users]);
@@ -165,6 +166,7 @@ export default function App() {
   };
 
   const handleSeedDemo = async () => {
+    if (!isDemoMode()) return;
     await Promise.all([userRepo.clear(), nurseRepo.clear(), scheduleRepo.clear()]);
     await applyCsvText(sampleCsv);
     await Promise.all(sampleNurses.map((nurse) => nurseRepo.upsert(nurse)));
@@ -217,6 +219,27 @@ export default function App() {
     setCurrentDate(addMonths(currentDate, delta));
   };
 
+  if (!authUser) {
+    return (
+      <div className="login-shell">
+        <section className="login-card card panel">
+          <h1>訪問看護スケジューラ</h1>
+          <p className="login-lead">利用を開始するには、発行済みのメールアドレスとパスワードでログインしてください。</p>
+          <CloudSyncPanel
+            authUser={authUser}
+            syncState={syncState}
+            email={email}
+            password={password}
+            onChangeEmail={setEmail}
+            onChangePassword={setPassword}
+            onSignIn={handleSignIn}
+            onSignOut={handleSignOut}
+          />
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
       <Toolbar
@@ -227,7 +250,6 @@ export default function App() {
         onNext={() => navigate(1)}
         onExportCsv={handleExportCsv}
         onExportPdf={handleExportPdf}
-        onSeedDemo={handleSeedDemo}
       />
 
       <section className="stats-grid">
@@ -271,7 +293,7 @@ export default function App() {
         <main className="content">
           <section className="card panel note-card">
             <h2>自動割当ロジック</h2>
-            <p>勤務曜日、午前/午後可否、訪問可能スキル、常勤/非常勤、希望性別、同一時間帯重複、日次上限、同一エリア継続性を総合評価して自動割当します。デモモードではダミーキーでもローカル同期と模擬ルート最適化で操作確認でき、本番キー投入後は Firebase / Google Maps 実接続へ切り替えられます。</p>
+            <p>勤務曜日、午前/午後可否、訪問可能スキル、常勤/非常勤、希望性別、同一時間帯重複、日次上限、同一エリア継続性を総合評価して自動割当します。</p>
           </section>
           <CalendarView
             days={visibleDays}
