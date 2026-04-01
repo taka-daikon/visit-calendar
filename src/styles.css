@@ -58,16 +58,18 @@ button:hover { opacity: 0.95; }
 .calendar-cell.muted { opacity: 0.55; }
 .calendar-section { display: grid; gap: 6px; }
 .section-title { font-size: 12px; color: #486581; text-transform: uppercase; letter-spacing: 0.04em; }
-.calendar-item { background: rgba(255,255,255,0.92); border-radius: 10px; padding: 8px; border-left: 6px solid #cbd5e1; font-size: 13px; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.calendar-item { position: relative; background: rgba(255,255,255,0.92); border-radius: 10px; padding: 8px; border-left: 6px solid #cbd5e1; font-size: 13px; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
 .calendar-item-body { min-width: 0; display: grid; gap: 3px; }
 .calendar-item-title { font-weight: 600; }
 .calendar-item-sub { font-size: 12px; color: #486581; }
 .calendar-item button { padding: 2px 8px; border-radius: 8px; }
 .worker-slot { border-left-color: #93c5fd; background: #eff6ff; }
 .worker-readonly { font-size: 12px; }
-.hover-actions { display: flex; gap: 6px; }
+.hover-actions { position: absolute; top: 8px; right: 8px; display: flex; flex-direction: column; gap: 6px; z-index: 5; }
+.removable { padding-right: 42px; align-items: flex-start; }
 .removable .hover-actions { opacity: 0; pointer-events: none; transition: opacity 0.15s ease; }
-.removable:hover .hover-actions { opacity: 1; pointer-events: auto; }
+.removable:hover .hover-actions, .hover-actions:hover { opacity: 1; pointer-events: auto; }
+.hover-actions button { width: 28px; height: 28px; padding: 0; border-radius: 999px; display: grid; place-items: center; font-weight: 700; line-height: 1; }
 .hover-confirm { background: #dcfce7; border-color: #86efac; color: #166534; }
 .hover-remove { background: #fee2e2; border-color: #fecaca; color: #b91c1c; }
 .confirmed-zone { border-top: 1px dashed #cbd5e1; padding-top: 8px; }
