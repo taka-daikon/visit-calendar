@@ -14,6 +14,7 @@ interface Props {
   areaColors: Record<string, string>;
   onDragStart: (slotId: string) => void;
   onDropCandidate: (dateKey: string, slotId?: string) => void;
+  onConfirmCandidate: (slotId: string) => void;
   onRemoveCandidate: (slotId: string) => void;
   onRemoveScheduled: (slotId: string) => void;
   viewMode: ViewMode;
@@ -27,6 +28,7 @@ export function CalendarView({
   areaColors,
   onDragStart,
   onDropCandidate,
+  onConfirmCandidate,
   onRemoveCandidate,
   onRemoveScheduled,
   viewMode
@@ -88,8 +90,14 @@ export function CalendarView({
                     }}
                     style={{ borderLeftColor: areaColors[visit.area] ?? '#cbd5e1' }}
                   >
-                    <span>[{visit.start}-{visit.end}] {visit.userName}</span>
-                    <button className="hover-remove" onClick={() => onRemoveCandidate(visit.slotId)}>×</button>
+                    <div className="calendar-item-body">
+                      <div className="calendar-item-title">[{visit.start}-{visit.end}] {visit.userName}</div>
+                      <div className="calendar-item-sub">{visit.area}</div>
+                    </div>
+                    <div className="hover-actions">
+                      <button className="hover-confirm" onClick={() => onConfirmCandidate(visit.slotId)}>○</button>
+                      <button className="hover-remove" onClick={() => onRemoveCandidate(visit.slotId)}>×</button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -101,8 +109,11 @@ export function CalendarView({
                   <div key={`${day.dateKey}-${nurseName}`} className="confirmed-group">
                     <div className="confirmed-group-title">{nurseName}</div>
                     {visits.map((visit) => (
-                      <div key={visit.slotId} className="calendar-item confirmed" style={{ borderLeftColor: areaColors[visit.area] ?? '#cbd5e1' }}>
-                        <span>【確定】[{visit.start}-{visit.end}] {visit.userName}</span>
+                      <div key={visit.slotId} className="calendar-item confirmed confirmed-bright" style={{ borderLeftColor: areaColors[visit.area] ?? '#cbd5e1' }}>
+                        <div className="calendar-item-body">
+                          <div className="calendar-item-title">【確定】[{visit.start}-{visit.end}] {visit.userName}</div>
+                          <div className="calendar-item-sub">{visit.area}</div>
+                        </div>
                         <button onClick={() => onRemoveScheduled(visit.slotId)}>×</button>
                       </div>
                     ))}

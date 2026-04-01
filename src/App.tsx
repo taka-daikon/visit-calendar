@@ -361,6 +361,27 @@ export default function App() {
     showToast('候補の日時を更新しました');
   };
 
+  const handleConfirmCandidate = async (slotId: string) => {
+    const visit = effectiveCandidateVisits.find((item) => item.slotId === slotId);
+    if (!visit) {
+      showToast('候補が見つかりませんでした。', 'error');
+      return;
+    }
+
+    const { nurse, score } = autoAssignNurse(visit, nurses, scheduledVisits);
+    const scheduled: ScheduledVisit = {
+      ...visit,
+      confirmedAt: new Date().toISOString(),
+      nurseId: nurse?.id,
+      nurseName: nurse?.name,
+      assignmentScore: score,
+      manuallyEdited: true
+    };
+
+    await scheduleRepo.upsert(scheduled);
+    showToast(nurse ? `候補を確定しました（${nurse.name}）` : '候補を確定しました（未割当）');
+  };
+
   const handleRemoveCandidate = (slotId: string) => {
     setHiddenCandidateIds((prev) => (prev.includes(slotId) ? prev : [...prev, slotId]));
     setCandidateOverrides((prev) => {
@@ -563,6 +584,7 @@ export default function App() {
             areaColors={areaColors}
             onDragStart={setDraggedSlotId}
             onDropCandidate={handleMoveCandidate}
+            onConfirmCandidate={handleConfirmCandidate}
             onRemoveCandidate={handleRemoveCandidate}
             onRemoveScheduled={handleRemoveScheduled}
             viewMode={viewMode}

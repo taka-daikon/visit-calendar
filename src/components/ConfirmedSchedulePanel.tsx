@@ -16,7 +16,10 @@ export function ConfirmedSchedulePanel({ visits, nurses, onUpdate, onRemove }: P
         {visits.map((visit) => (
           <article key={visit.slotId} className="mini-card">
             <div className="split-line">
-              <strong>{visit.userName}</strong>
+              <div>
+                <strong>{visit.userName}</strong>
+                <div className="card-subtext">{visit.area}</div>
+              </div>
               <button onClick={() => onRemove(visit.slotId)}>差し戻し</button>
             </div>
             <div>{visit.dateKey} [{visit.start}-{visit.end}] / {visit.area}</div>
