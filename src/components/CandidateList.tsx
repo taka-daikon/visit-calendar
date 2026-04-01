@@ -9,11 +9,21 @@ interface Props {
 export function CandidateList({ visits, areaColors, onDragStart }: Props) {
   return (
     <section className="card panel">
-      <h2>訪問候補 ({visits.length})</h2>
+      <h2>未割当候補 ({visits.length})</h2>
       <div className="compact-list scrollable-list">
-        {visits.length === 0 && <p className="empty">候補がありません。</p>}
+        {visits.length === 0 && <p className="empty">未割当候補はありません。</p>}
         {visits.map((visit) => (
-          <article key={visit.slotId} className="visit-card" draggable onDragStart={() => onDragStart(visit.slotId)} style={{ borderLeftColor: areaColors[visit.area] ?? '#cbd5e1' }}>
+          <article
+            key={visit.slotId}
+            className="visit-card"
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = 'move';
+              e.dataTransfer.setData('text/plain', visit.slotId);
+              onDragStart(visit.slotId);
+            }}
+            style={{ borderLeftColor: areaColors[visit.area] ?? '#cbd5e1' }}
+          >
             <div className="split-line">
               <strong>{visit.userName}</strong>
               <span className="badge" style={{ background: areaColors[visit.area] ?? '#eef2ff' }}>{visit.area}</span>

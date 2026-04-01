@@ -15,12 +15,12 @@ import { sampleCsv } from './data/sampleCsv';
 import { sampleNurses } from './data/sampleNurses';
 import { currentSyncProvider, isDemoMode } from './services/appEnv';
 import { signIn, signOutUser, subscribeAuth } from './services/firebaseAuth';
-import { downloadTextFile, printHtml } from './services/persistence';
+import { downloadTextFile, loadFromStorage, printHtml, saveToStorage } from './services/persistence';
 import { createNurseRepo, createScheduleRepo, createUserRepo } from './services/repository';
-import { AuthUser, Filters, Nurse, RouteSuggestion, ScheduledVisit, SyncState, UserRecord, ViewMode } from './types';
-import { applyFilters, buildCandidateVisits, getAreaColors, getUnscheduledCandidates, groupByDate } from './utils/calendar';
+import { AuthUser, CandidateVisit, Filters, Nurse, RouteSuggestion, ScheduledVisit, SyncState, UserRecord, ViewMode, WeekdayJa } from './types';
+import { applyFilters, buildCandidateVisits, getAreaColors, getUnscheduledCandidates, groupByDate, minutesToTime, timeToMinutes } from './utils/calendar';
 import { parseCsv } from './utils/csv';
-import { START_MONTH, START_YEAR, addMonths, formatDateKey, formatMonthLabel, getVisibleDays } from './utils/date';
+import { START_MONTH, START_YEAR, WEEKDAY_LABELS, addMonths, formatDateKey, formatMonthLabel, getVisibleDays } from './utils/date';
 import { readCsvFileText } from './utils/fileText';
 import { suggestOptimizedRoute } from './utils/mapsRouteService';
 import { parseNurseCsv } from './utils/nurseCsv';
@@ -30,10 +30,21 @@ import './styles.css';
 
 const today = new Date('2026-03-28T09:00:00');
 const defaultFilters: Filters = { keyword: '', area: '', insuranceType: '', nurseGender: '' };
+const HIDDEN_CANDIDATE_KEY = 'visit-calendar-hidden-candidates';
+const MOVED_CANDIDATE_KEY = 'visit-calendar-moved-candidates';
 
 const userRepo = createUserRepo();
 const nurseRepo = createNurseRepo();
 const scheduleRepo = createScheduleRepo();
+
+type CandidateOverrideMap = Record<string, Partial<CandidateVisit>>;
+
+type WorkerAvailabilityItem = {
+  nurseId: string;
+  nurseName: string;
+  label: string;
+  ranges: string[];
+};
 
 function monthStart(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), 1);
@@ -46,11 +57,95 @@ function resolveTargetMonth(sourceNurses: Nurse[], fallback: Date): Date {
   return new Date(Number(match[1]), Number(match[2]) - 1, 1);
 }
 
+function weekdayFromDateKey(dateKey: string): WeekdayJa {
+  const date = new Date(`${dateKey}T00:00:00`);
+  return WEEKDAY_LABELS[date.getDay()];
+}
+
+function buildWorkerAvailabilityForDate(nurses: Nurse[], dateKey: string): WorkerAvailabilityItem[] {
+  const visitMonth = dateKey.slice(0, 7);
+  const dayColumn = `${Number(dateKey.slice(8, 10))}日`;
+  const weekday = weekdayFromDateKey(dateKey);
+
+  return nurses
+    .filter((nurse) => nurse.active)
+    .flatMap((nurse) => {
+      const monthlyAvailability = nurse.monthlyAvailability ?? {};
+      const hasMonthly = Object.keys(monthlyAvailability).length > 0;
+      const targetMonth = nurse.monthlyAvailabilityMonth?.trim();
+
+      if (hasMonthly && (!targetMonth || targetMonth === visitMonth)) {
+        const raw = monthlyAvailability[dayColumn];
+        if (!raw) return [];
+        const ranges = raw.split('|').map((item) => item.trim()).filter(Boolean);
+        if (!ranges.length) return [];
+        return [{ nurseId: nurse.id, nurseName: nurse.name, label: ranges.join(' / '), ranges }];
+      }
+
+      if (!nurse.workingWeekdays.includes(weekday)) return [];
+      const ranges: string[] = [];
+      if (nurse.shiftAvailability.午前) ranges.push('09:00-12:00');
+      if (nurse.shiftAvailability.午後) ranges.push('13:00-18:00');
+      if (!ranges.length) return [];
+      return [{ nurseId: nurse.id, nurseName: nurse.name, label: ranges.join(' / '), ranges }];
+    })
+    .sort((a, b) => a.nurseName.localeCompare(b.nurseName, 'ja'));
+}
+
+function applyCandidateCustomizations(candidates: CandidateVisit[], hiddenIds: string[], overrides: CandidateOverrideMap): CandidateVisit[] {
+  const hidden = new Set(hiddenIds);
+  return candidates
+    .filter((candidate) => !hidden.has(candidate.slotId))
+    .map((candidate) => (overrides[candidate.slotId] ? { ...candidate, ...overrides[candidate.slotId] } : candidate));
+}
+
+function resolveMovedVisit(visit: CandidateVisit, targetDateKey: string, nurses: Nurse[]): CandidateVisit {
+  const workerAvailability = buildWorkerAvailabilityForDate(nurses, targetDateKey);
+  const duration = visit.endMinutes - visit.startMinutes;
+  const ranges = workerAvailability
+    .flatMap((worker) => worker.ranges)
+    .map((range) => {
+      const [start, end] = range.split('-').map((value) => value.trim());
+      return { start, end, startMinutes: timeToMinutes(start), endMinutes: timeToMinutes(end) };
+    })
+    .filter((item) => Number.isFinite(item.startMinutes) && Number.isFinite(item.endMinutes))
+    .sort((a, b) => a.startMinutes - b.startMinutes);
+
+  let nextStart = visit.start;
+  let nextEnd = visit.end;
+  let nextStartMinutes = visit.startMinutes;
+  let nextEndMinutes = visit.endMinutes;
+
+  const fitsExisting = ranges.some((range) => visit.startMinutes >= range.startMinutes && visit.endMinutes <= range.endMinutes);
+  if (!fitsExisting && ranges.length > 0) {
+    const range = ranges[0];
+    nextStartMinutes = range.startMinutes;
+    nextEndMinutes = Math.min(range.endMinutes, range.startMinutes + duration);
+    if (nextEndMinutes <= nextStartMinutes) {
+      nextEndMinutes = range.endMinutes;
+    }
+    nextStart = minutesToTime(nextStartMinutes);
+    nextEnd = minutesToTime(nextEndMinutes);
+  }
+
+  return {
+    ...visit,
+    dateKey: targetDateKey,
+    weekday: weekdayFromDateKey(targetDateKey),
+    start: nextStart,
+    end: nextEnd,
+    startMinutes: nextStartMinutes,
+    endMinutes: nextEndMinutes
+  };
+}
+
 export default function App() {
   const [csvText, setCsvText] = useState(isDemoMode() ? sampleCsv : '');
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [nurses, setNurses] = useState<Nurse[]>([]);
   const [scheduledMap, setScheduledMap] = useState<Record<string, ScheduledVisit>>({});
+  const [hiddenCandidateIds, setHiddenCandidateIds] = useState<string[]>(() => loadFromStorage(HIDDEN_CANDIDATE_KEY, []));
+  const [candidateOverrides, setCandidateOverrides] = useState<CandidateOverrideMap>(() => loadFromStorage(MOVED_CANDIDATE_KEY, {}));
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [viewMode, setViewMode] = useState<ViewMode>('month');
   const [currentDate, setCurrentDate] = useState(new Date(START_YEAR, START_MONTH, today.getDate()));
@@ -64,6 +159,8 @@ export default function App() {
   const [syncState, setSyncState] = useState<SyncState>({ provider: currentSyncProvider(), connected: currentSyncProvider() !== 'local' });
 
   useEffect(() => subscribeAuth(setAuthUser), []);
+  useEffect(() => saveToStorage(HIDDEN_CANDIDATE_KEY, hiddenCandidateIds), [hiddenCandidateIds]);
+  useEffect(() => saveToStorage(MOVED_CANDIDATE_KEY, candidateOverrides), [candidateOverrides]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -108,12 +205,25 @@ export default function App() {
   const visibleDays = useMemo(() => getVisibleDays(currentDate, viewMode), [currentDate, viewMode]);
   const areaList = useMemo(() => Array.from(new Set(users.map((user) => user.居住地))).sort((a, b) => a.localeCompare(b, 'ja')), [users]);
   const areaColors = useMemo(() => getAreaColors(areaList), [areaList]);
-  const candidateVisits = useMemo(() => buildCandidateVisits(users, visibleDays), [users, visibleDays]);
-  const filteredCandidates = useMemo(() => applyFilters(candidateVisits, filters), [candidateVisits, filters]);
+
+  const baseCandidateVisits = useMemo(() => buildCandidateVisits(users, visibleDays), [users, visibleDays]);
+  const effectiveCandidateVisits = useMemo(
+    () => applyCandidateCustomizations(baseCandidateVisits, hiddenCandidateIds, candidateOverrides),
+    [baseCandidateVisits, hiddenCandidateIds, candidateOverrides]
+  );
+  const filteredCandidates = useMemo(() => applyFilters(effectiveCandidateVisits, filters), [effectiveCandidateVisits, filters]);
   const unscheduledCandidates = useMemo(() => getUnscheduledCandidates(filteredCandidates, scheduledMap), [filteredCandidates, scheduledMap]);
   const scheduledVisits = useMemo(() => Object.values(scheduledMap).sort((a, b) => a.dateKey.localeCompare(b.dateKey) || a.startMinutes - b.startMinutes), [scheduledMap]);
   const candidatesByDate = useMemo(() => groupByDate(unscheduledCandidates), [unscheduledCandidates]);
   const scheduledByDate = useMemo(() => groupByDate(scheduledVisits), [scheduledVisits]);
+  const workerAvailabilityByDate = useMemo(
+    () => visibleDays.reduce<Record<string, WorkerAvailabilityItem[]>>((acc, day) => {
+      acc[day.dateKey] = buildWorkerAvailabilityForDate(nurses, day.dateKey);
+      return acc;
+    }, {}),
+    [visibleDays, nurses]
+  );
+
   const alerts = useMemo(() => buildReviewAlerts(users, today), [users]);
   const documents = useMemo(() => buildDocumentDeadlines(users, today), [users]);
   const warnings = useMemo(() => buildConflictWarnings(scheduledVisits), [scheduledVisits]);
@@ -121,10 +231,21 @@ export default function App() {
     acc[visit.area] = (acc[visit.area] ?? 0) + (visit.estimatedTravelKm ?? 0);
     return acc;
   }, {}), [scheduledVisits]);
-  const report = useMemo(() => buildMonthlyReport(candidateVisits, scheduledVisits, routeKmByArea), [candidateVisits, scheduledVisits, routeKmByArea]);
+  const report = useMemo(() => buildMonthlyReport(effectiveCandidateVisits, scheduledVisits, routeKmByArea), [effectiveCandidateVisits, scheduledVisits, routeKmByArea]);
 
   const showToast = (message: string, tone: 'success' | 'error' = 'success') => {
     setToast({ message, tone });
+  };
+
+  const clearCandidateCustomizations = () => {
+    setHiddenCandidateIds([]);
+    setCandidateOverrides({});
+  };
+
+  const buildCustomizedMonthCandidates = (sourceUsers: UserRecord[], sourceNurses: Nurse[], targetDate: Date) => {
+    const monthDays = getVisibleDays(targetDate, 'month').filter((day) => day.inMonth);
+    const base = buildCandidateVisits(sourceUsers, monthDays);
+    return applyCandidateCustomizations(base, hiddenCandidateIds, candidateOverrides);
   };
 
   const runAutoAssignment = async (sourceUsers = users, sourceNurses = nurses, baseDate = currentDate) => {
@@ -132,8 +253,7 @@ export default function App() {
     if (!sourceNurses.length) throw new Error('先にワーカーCSVを反映してください。');
 
     const targetDate = resolveTargetMonth(sourceNurses, baseDate);
-    const days = getVisibleDays(targetDate, 'month').filter((day) => day.inMonth);
-    const allCandidates = buildCandidateVisits(sourceUsers, days);
+    const allCandidates = buildCustomizedMonthCandidates(sourceUsers, sourceNurses, targetDate);
     const assigned: ScheduledVisit[] = [];
 
     allCandidates.forEach((visit) => {
@@ -160,6 +280,7 @@ export default function App() {
     const parsed = parseCsv(text);
     if (!parsed.length) throw new Error('利用者CSVにデータがありません。');
 
+    clearCandidateCustomizations();
     setCsvText(text);
     setUsers(parsed);
     await userRepo.clear();
@@ -192,6 +313,7 @@ export default function App() {
     const parsed = parseNurseCsv(text);
     if (!parsed.length) throw new Error('ワーカーCSVにデータがありません。');
 
+    clearCandidateCustomizations();
     const targetDate = resolveTargetMonth(parsed, currentDate);
     setNurses(parsed);
     setCurrentDate(targetDate);
@@ -217,25 +339,41 @@ export default function App() {
     }
   };
 
-  const handleDropVisit = async () => {
-    const visit = unscheduledCandidates.find((item) => item.slotId === draggedSlotId);
+  const handleMoveCandidate = (targetDateKey: string, droppedSlotId?: string) => {
+    const slotId = droppedSlotId || draggedSlotId;
+    if (!slotId) return;
+    const visit = effectiveCandidateVisits.find((item) => item.slotId === slotId);
     if (!visit) return;
-    const { nurse, score } = autoAssignNurse(visit, nurses, scheduledVisits);
-    const scheduled: ScheduledVisit = {
-      ...visit,
-      confirmedAt: new Date().toISOString(),
-      nurseId: nurse?.id,
-      nurseName: nurse?.name,
-      assignmentScore: score
-    };
-    await scheduleRepo.upsert(scheduled);
+    const movedVisit = resolveMovedVisit(visit, targetDateKey, nurses);
+    setCandidateOverrides((prev) => ({
+      ...prev,
+      [slotId]: {
+        dateKey: movedVisit.dateKey,
+        weekday: movedVisit.weekday,
+        start: movedVisit.start,
+        end: movedVisit.end,
+        startMinutes: movedVisit.startMinutes,
+        endMinutes: movedVisit.endMinutes
+      }
+    }));
+    setHiddenCandidateIds((prev) => prev.filter((id) => id !== slotId));
     setDraggedSlotId('');
-    showToast('スケジュールを更新しました');
+    showToast('候補の日時を更新しました');
+  };
+
+  const handleRemoveCandidate = (slotId: string) => {
+    setHiddenCandidateIds((prev) => (prev.includes(slotId) ? prev : [...prev, slotId]));
+    setCandidateOverrides((prev) => {
+      const next = { ...prev };
+      delete next[slotId];
+      return next;
+    });
+    showToast('候補を削除しました');
   };
 
   const handleRemoveScheduled = async (slotId: string) => {
     await scheduleRepo.remove(slotId);
-    showToast('スケジュールを削除しました');
+    showToast('確定スケジュールを削除しました');
   };
 
   const handleUpdateScheduled = async (visit: ScheduledVisit) => {
@@ -263,14 +401,6 @@ export default function App() {
     setRouteSuggestion(suggestion);
     if (!suggestion) return;
     await Promise.all(suggestion.orderedVisits.map((visit) => scheduleRepo.upsert(visit)));
-  };
-
-  const handleSeedDemo = async () => {
-    if (!isDemoMode()) return;
-    await Promise.all([userRepo.clear(), nurseRepo.clear(), scheduleRepo.clear()]);
-    await applyCsvText(sampleCsv);
-    await Promise.all(sampleNurses.map((nurse) => nurseRepo.upsert(nurse)));
-    setSyncState((prev) => ({ ...prev, connected: true, error: undefined }));
   };
 
   const handleExportCsv = () => {
@@ -304,6 +434,7 @@ export default function App() {
   };
 
   const handleClearUsersCsv = async () => {
+    clearCandidateCustomizations();
     await Promise.all([userRepo.clear(), scheduleRepo.clear()]);
     setCsvText('');
     setUsers([]);
@@ -312,6 +443,7 @@ export default function App() {
   };
 
   const handleClearNurseCsv = async () => {
+    clearCandidateCustomizations();
     await Promise.all([nurseRepo.clear(), scheduleRepo.clear()]);
     setNurses([]);
     setRouteSuggestion(null);
@@ -380,7 +512,7 @@ export default function App() {
 
       <section className="stats-grid">
         <article className="stat-card"><span>利用者数</span><strong>{users.length}</strong></article>
-        <article className="stat-card"><span>未確定候補</span><strong>{unscheduledCandidates.length}</strong></article>
+        <article className="stat-card"><span>未割当候補</span><strong>{unscheduledCandidates.length}</strong></article>
         <article className="stat-card"><span>確定訪問</span><strong>{scheduledVisits.length}</strong></article>
         <article className="stat-card"><span>看護師数</span><strong>{nurses.length}</strong></article>
         <article className="stat-card"><span>重複警告</span><strong>{warnings.length}</strong></article>
@@ -390,7 +522,7 @@ export default function App() {
         <aside className="sidebar">
           <section className="card panel">
             <h2>CSV 管理画面</h2>
-            <p className="helper-text">Excel 保存時の文字化け対策として、UTF-8 / UTF-8 BOM / Shift_JIS のCSV読込に対応しました。利用者CSVを更新すると、ワーカーCSVが入っていれば自動で最適割当まで実行します。</p>
+            <p className="helper-text">ワーカーCSVを読み込むと日別の看護師予定をカレンダー表示します。利用者候補はドラッグ＆ドロップで日付移動でき、ホバーした×で不要候補を削除できます。</p>
             <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} rows={10} />
             <div className="toolbar-actions left">
               <button className="primary" onClick={() => applyCsvText(csvText).catch((error) => showToast(error instanceof Error ? error.message : '利用者CSVの反映に失敗しました。', 'error'))}>CSV反映</button>
@@ -421,15 +553,17 @@ export default function App() {
         <main className="content">
           <section className="card panel note-card">
             <h2>自動割当ロジック</h2>
-            <p>勤務曜日、午前/午後可否、月別の日別希望時間、訪問可能スキル、常勤/非常勤、希望性別、同一時間帯重複、日次上限、同一エリア継続性を総合評価して自動割当します。</p>
+            <p>看護師の月別希望時間、勤務曜日、午前/午後可否、訪問可能スキル、希望性別、同一時間帯重複、日次上限、同一エリア継続性を総合評価して最適割当します。</p>
           </section>
           <CalendarView
             days={visibleDays}
             candidatesByDate={candidatesByDate}
             scheduledByDate={scheduledByDate}
+            workerAvailabilityByDate={workerAvailabilityByDate}
             areaColors={areaColors}
             onDragStart={setDraggedSlotId}
-            onDropVisit={handleDropVisit}
+            onDropCandidate={handleMoveCandidate}
+            onRemoveCandidate={handleRemoveCandidate}
             onRemoveScheduled={handleRemoveScheduled}
             viewMode={viewMode}
           />
