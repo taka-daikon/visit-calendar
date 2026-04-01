@@ -11,8 +11,12 @@ textarea, input, select { width: 100%; border: 1px solid #cbd5e1; border-radius:
 button { border: 1px solid #cbd5e1; background: white; border-radius: 10px; padding: 10px 14px; cursor: pointer; }
 button.primary { background: #2563eb; color: white; border-color: #2563eb; }
 button:hover { opacity: 0.95; }
+.helper-text { margin: 0 0 12px; color: #486581; line-height: 1.6; font-size: 13px; }
 
 .app-shell { padding: 20px; display: grid; gap: 20px; }
+.toast { position: fixed; top: 18px; right: 18px; z-index: 1000; padding: 12px 16px; border-radius: 12px; color: white; box-shadow: 0 12px 24px rgba(15, 23, 42, 0.18); }
+.toast-success { background: #16a34a; }
+.toast-error { background: #dc2626; }
 .login-shell { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
 .login-card { width: min(560px, 100%); display: grid; gap: 16px; }
 .login-card h1 { margin: 0; font-size: 32px; }

@@ -6,6 +6,7 @@ interface Props {
   onToggleActive: (id: string) => void;
   onAdd: (nurse: Omit<Nurse, 'id'>) => void;
   onImportCsv: (file: File) => void;
+  onClearCsv: () => void;
 }
 
 const defaultDraft: Omit<Nurse, 'id'> = {
@@ -20,7 +21,7 @@ const defaultDraft: Omit<Nurse, 'id'> = {
   areas: []
 };
 
-export function NurseMasterPanel({ nurses, onToggleActive, onAdd, onImportCsv }: Props) {
+export function NurseMasterPanel({ nurses, onToggleActive, onAdd, onImportCsv, onClearCsv }: Props) {
   const [draft, setDraft] = useState(defaultDraft);
 
   return (
@@ -54,6 +55,7 @@ export function NurseMasterPanel({ nurses, onToggleActive, onAdd, onImportCsv }:
       <div className="toolbar-actions left">
         <button className="primary" onClick={() => { if (!draft.name.trim()) return; onAdd(draft); setDraft(defaultDraft); }}>看護師を追加</button>
         <input type="file" accept=".csv,text/csv" onChange={(e) => { const file = e.target.files?.[0]; if (file) onImportCsv(file); e.currentTarget.value = ''; }} />
+        <button onClick={onClearCsv}>ワーカーCSV削除</button>
       </div>
     </section>
   );

@@ -12,7 +12,8 @@ export function saveToStorage<T>(key: string, value: T): void {
 }
 
 export function downloadTextFile(fileName: string, content: string, contentType = 'text/plain;charset=utf-8'): void {
-  const blob = new Blob([content], { type: contentType });
+  const payload = contentType.includes('text/csv') ? `\uFEFF${content}` : content;
+  const blob = new Blob([payload], { type: contentType });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
