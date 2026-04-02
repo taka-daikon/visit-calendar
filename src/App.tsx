@@ -37,6 +37,8 @@ const VIEW_MODE_KEY = 'visit-calendar-view-mode';
 const FILTERS_KEY = 'visit-calendar-filters';
 const SELECTED_NURSE_KEY = 'visit-calendar-selected-nurse';
 const CSV_DRAFT_KEY = 'visit-calendar-csv-draft';
+const SCHEDULE_BACKUP_KEY = 'visit-calendar-schedule-backup';
+const ROUTE_SUGGESTION_KEY = 'visit-calendar-route-suggestion';
 
 const userRepo = createUserRepo();
 const nurseRepo = createNurseRepo();
@@ -166,13 +168,14 @@ export default function App() {
   const [currentDate, setCurrentDate] = useState<Date>(() => loadPersistedDate());
   const [draggedSlotId, setDraggedSlotId] = useState('');
   const [selectedNurseId, setSelectedNurseId] = useState(() => loadFromStorage(SELECTED_NURSE_KEY, ''));
-  const [routeSuggestion, setRouteSuggestion] = useState<RouteSuggestion | null>(null);
+  const [routeSuggestion, setRouteSuggestion] = useState<RouteSuggestion | null>(() => loadFromStorage<RouteSuggestion | null>(ROUTE_SUGGESTION_KEY, null));
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [toast, setToast] = useState<{ message: string; tone: 'success' | 'error' } | null>(null);
   const [syncState, setSyncState] = useState<SyncState>({ provider: currentSyncProvider(), connected: currentSyncProvider() !== 'local' });
   const [interactionVersion, setInteractionVersion] = useState(0);
+  const [scheduleHydrated, setScheduleHydrated] = useState(false);
 
   useEffect(() => subscribeAuth(setAuthUser), []);
   useEffect(() => saveToStorage(HIDDEN_CANDIDATE_KEY, hiddenCandidateIds), [hiddenCandidateIds]);
@@ -182,6 +185,11 @@ export default function App() {
   useEffect(() => saveToStorage(CURRENT_DATE_KEY, currentDate.toISOString()), [currentDate]);
   useEffect(() => saveToStorage(SELECTED_NURSE_KEY, selectedNurseId), [selectedNurseId]);
   useEffect(() => saveToStorage(CSV_DRAFT_KEY, csvText), [csvText]);
+  useEffect(() => saveToStorage(ROUTE_SUGGESTION_KEY, routeSuggestion), [routeSuggestion]);
+  useEffect(() => {
+    if (!scheduleHydrated) return;
+    saveToStorage(SCHEDULE_BACKUP_KEY, Object.values(scheduledMap));
+  }, [scheduledMap, scheduleHydrated]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -201,6 +209,7 @@ export default function App() {
         acc[item.slotId] = item;
         return acc;
       }, {}));
+      setScheduleHydrated(true);
       setSyncState((prev) => ({ ...prev, lastSyncedAt: new Date().toISOString() }));
     });
     return () => {
@@ -222,6 +231,14 @@ export default function App() {
       sampleNurses.forEach((item) => { nurseRepo.upsert(item); });
     }
   }, [authUser, users.length, nurses.length]);
+
+  useEffect(() => {
+    if (!authUser || !scheduleHydrated) return;
+    if (Object.keys(scheduledMap).length > 0) return;
+    const backup = loadFromStorage<ScheduledVisit[]>(SCHEDULE_BACKUP_KEY, []);
+    if (!backup.length) return;
+    Promise.all(backup.map((visit) => scheduleRepo.upsert(visit))).catch(() => undefined);
+  }, [authUser, scheduleHydrated, scheduledMap]);
 
   const visibleDays = useMemo(() => getVisibleDays(currentDate, viewMode), [currentDate, viewMode]);
   const areaList = useMemo(() => Array.from(new Set(users.map((user) => extractAreaName(user.居住地)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ja')), [users]);
@@ -412,6 +429,57 @@ export default function App() {
     showToast(nurse ? `候補を確定しました（${nurse.name}）` : '候補を確定しました（未割当）');
   };
 
+  const handleUpdateCandidateTime = (slotId: string, start: string, end: string) => {
+    const visit = effectiveCandidateVisits.find((item) => item.slotId === slotId);
+    if (!visit) {
+      showToast('候補が見つかりませんでした。', 'error');
+      return;
+    }
+    const startMinutes = timeToMinutes(start);
+    const endMinutes = timeToMinutes(end);
+    if (!start || !end || Number.isNaN(startMinutes) || Number.isNaN(endMinutes) || startMinutes >= endMinutes) {
+      showToast('時間帯を正しく入力してください。', 'error');
+      return;
+    }
+    setCandidateOverrides((prev) => ({
+      ...prev,
+      [slotId]: {
+        ...prev[slotId],
+        start,
+        end,
+        startMinutes,
+        endMinutes
+      }
+    }));
+    setHiddenCandidateIds((prev) => prev.filter((id) => id !== slotId));
+    refreshUi();
+    showToast('候補の時間帯を更新しました');
+  };
+
+  const handleUpdateScheduledTime = async (slotId: string, start: string, end: string) => {
+    const visit = scheduledMap[slotId];
+    if (!visit) {
+      showToast('確定スケジュールが見つかりませんでした。', 'error');
+      return;
+    }
+    const startMinutes = timeToMinutes(start);
+    const endMinutes = timeToMinutes(end);
+    if (!start || !end || Number.isNaN(startMinutes) || Number.isNaN(endMinutes) || startMinutes >= endMinutes) {
+      showToast('時間帯を正しく入力してください。', 'error');
+      return;
+    }
+    await scheduleRepo.upsert({
+      ...visit,
+      start,
+      end,
+      startMinutes,
+      endMinutes,
+      manuallyEdited: true
+    });
+    refreshUi();
+    showToast('確定スケジュールの時間帯を更新しました');
+  };
+
   const handleRemoveCandidate = (slotId: string) => {
     setHiddenCandidateIds((prev) => (prev.includes(slotId) ? prev : [...prev, slotId]));
     setCandidateOverrides((prev) => {
@@ -496,6 +564,7 @@ export default function App() {
     setCsvText('');
     setUsers([]);
     setRouteSuggestion(null);
+    saveToStorage(SCHEDULE_BACKUP_KEY, []);
     refreshUi();
     showToast('利用者CSVを削除しました');
   };
@@ -505,6 +574,7 @@ export default function App() {
     await Promise.all([nurseRepo.clear(), scheduleRepo.clear()]);
     setNurses([]);
     setRouteSuggestion(null);
+    saveToStorage(SCHEDULE_BACKUP_KEY, []);
     refreshUi();
     showToast('ワーカーCSVを削除しました');
   };
@@ -638,6 +708,8 @@ export default function App() {
             onConfirmCandidate={handleConfirmCandidate}
             onRemoveCandidate={handleRemoveCandidate}
             onRemoveScheduled={handleRemoveScheduled}
+            onUpdateCandidateTime={handleUpdateCandidateTime}
+            onUpdateScheduledTime={handleUpdateScheduledTime}
             viewMode={viewMode}
             periodLabel={formatMonthLabel(currentDate)}
           />
