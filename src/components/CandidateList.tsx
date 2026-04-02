@@ -27,7 +27,7 @@ export function CandidateList({ visits, areaColors, onDragStart }: Props) {
             <div className="split-line">
               <div>
                 <strong>{visit.userName}</strong>
-                <div className="card-subtext">{visit.area}</div>
+                <div className="card-subtext">{visit.address || visit.area}</div>
               </div>
               <span className="badge" style={{ background: areaColors[visit.area] ?? '#eef2ff' }}>{visit.area}</span>
             </div>

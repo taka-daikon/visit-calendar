@@ -43,6 +43,7 @@ export interface CandidateVisit extends TimeSlot {
   dateKey: string;
   userId: string;
   userName: string;
+  address: string;
   area: string;
   insuranceType: InsuranceType;
   updateCycle: string;

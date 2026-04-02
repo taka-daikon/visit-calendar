@@ -18,6 +18,7 @@ interface Props {
   onRemoveCandidate: (slotId: string) => void;
   onRemoveScheduled: (slotId: string) => void;
   viewMode: ViewMode;
+  periodLabel: string;
 }
 
 export function CalendarView({
@@ -31,13 +32,20 @@ export function CalendarView({
   onConfirmCandidate,
   onRemoveCandidate,
   onRemoveScheduled,
-  viewMode
+  viewMode,
+  periodLabel
 }: Props) {
   const className = viewMode === 'month' ? 'calendar-grid month-grid' : viewMode === 'week' ? 'calendar-grid week-grid' : 'calendar-grid day-grid';
 
   return (
     <section className="card panel">
-      <h2>カレンダービュー</h2>
+      <header className="calendar-panel-header">
+        <div>
+          <h2>カレンダービュー</h2>
+          <p className="helper-text">〇で確定、×で削除。確定した訪問は濃い色のカードで表示され、下の「確定」欄へ移動します。</p>
+        </div>
+        <div className="calendar-period-chip">【{periodLabel}】</div>
+      </header>
       <div className={className}>
         {days.map((day) => {
           const dayCandidates = candidatesByDate[day.dateKey] ?? [];
@@ -92,11 +100,12 @@ export function CalendarView({
                   >
                     <div className="calendar-item-body">
                       <div className="calendar-item-title">[{visit.start}-{visit.end}] {visit.userName}</div>
-                      <div className="calendar-item-sub">{visit.area}</div>
+                      <div className="calendar-item-sub">{visit.address || visit.area}</div>
+                      <div className="calendar-item-meta">担当エリア: {visit.area}</div>
                     </div>
                     <div className="hover-actions">
-                      <button className="hover-confirm" onClick={() => onConfirmCandidate(visit.slotId)}>○</button>
-                      <button className="hover-remove" onClick={() => onRemoveCandidate(visit.slotId)}>×</button>
+                      <button className="hover-confirm" onClick={() => onConfirmCandidate(visit.slotId)} aria-label="確定">○</button>
+                      <button className="hover-remove" onClick={() => onRemoveCandidate(visit.slotId)} aria-label="削除">×</button>
                     </div>
                   </div>
                 ))}
@@ -109,12 +118,13 @@ export function CalendarView({
                   <div key={`${day.dateKey}-${nurseName}`} className="confirmed-group">
                     <div className="confirmed-group-title">{nurseName}</div>
                     {visits.map((visit) => (
-                      <div key={visit.slotId} className="calendar-item confirmed confirmed-bright" style={{ borderLeftColor: areaColors[visit.area] ?? '#cbd5e1' }}>
+                      <div key={visit.slotId} className="calendar-item confirmed confirmed-fixed" style={{ borderLeftColor: areaColors[visit.area] ?? '#cbd5e1' }}>
                         <div className="calendar-item-body">
                           <div className="calendar-item-title">【確定】[{visit.start}-{visit.end}] {visit.userName}</div>
-                          <div className="calendar-item-sub">{visit.area}</div>
+                          <div className="calendar-item-sub">{visit.address || visit.area}</div>
+                          <div className="calendar-item-meta">担当エリア: {visit.area}</div>
                         </div>
-                        <button onClick={() => onRemoveScheduled(visit.slotId)}>×</button>
+                        <button className="confirmed-remove" onClick={() => onRemoveScheduled(visit.slotId)} aria-label="差し戻し">×</button>
                       </div>
                     ))}
                   </div>

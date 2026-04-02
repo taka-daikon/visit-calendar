@@ -1,5 +1,5 @@
 import { CandidateVisit, CalendarDay, Filters, ScheduledVisit, UserRecord, WeekdayJa } from '../types';
-import { formatDateKey, WEEKDAY_LABELS } from './date';
+import { WEEKDAY_LABELS } from './date';
 import { inferSkills } from './skills';
 
 const TIME_COLUMN_MAP: Record<WeekdayJa, keyof UserRecord> = {
@@ -22,6 +22,17 @@ export const AREA_COORDS: Record<string, { lat: number; lng: number; color: stri
   '総社市中央': { lat: 34.6751, lng: 133.7463, color: '#E8FFF2' },
   '玉野市築港': { lat: 34.4938, lng: 133.9478, color: '#EEF2FF' }
 };
+
+const AREA_KEYS = Object.keys(AREA_COORDS).sort((a, b) => b.length - a.length);
+
+export function extractAreaName(address: string): string {
+  const normalized = String(address ?? '').trim();
+  if (!normalized) return '';
+  const matched = AREA_KEYS.find((area) => normalized.startsWith(area));
+  if (matched) return matched;
+  const cityWard = normalized.match(/^(.*?(?:市.*?区|市|区|町|村))/)?.[1];
+  return cityWard || normalized;
+}
 
 export function timeToMinutes(value: string): number {
   const [hours, minutes] = value.split(':').map(Number);
@@ -67,12 +78,15 @@ export function buildCandidateVisits(users: UserRecord[], days: CalendarDay[]): 
       if (!user.hopeDays.includes(weekday)) return [];
       const timeRange = String(user[TIME_COLUMN_MAP[weekday]] || '');
       if (!timeRange) return [];
+      const address = String(user.居住地 ?? '').trim();
+      const area = extractAreaName(address);
       return expandTimeRange(timeRange).map((slot, index) => ({
         slotId: `${day.dateKey}-${user.id}-${slot.start}-${index}`,
         dateKey: day.dateKey,
         userId: user.id,
         userName: user.利用者名,
-        area: user.居住地,
+        address,
+        area,
         insuranceType: user.保険区分,
         updateCycle: user.更新サイクル,
         genderPreference: user.希望性別,
@@ -92,7 +106,7 @@ export function applyFilters(visits: CandidateVisit[], filters: Filters): Candid
     if (filters.insuranceType && visit.insuranceType !== filters.insuranceType) return false;
     if (filters.nurseGender && visit.genderPreference !== '希望なし' && visit.genderPreference !== filters.nurseGender) return false;
     if (!keyword) return true;
-    return [visit.userName, visit.area, visit.treatment].some((value) => value.toLowerCase().includes(keyword));
+    return [visit.userName, visit.address, visit.area, visit.treatment].some((value) => value.toLowerCase().includes(keyword));
   });
 }
 

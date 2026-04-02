@@ -18,7 +18,7 @@ import { signIn, signOutUser, subscribeAuth } from './services/firebaseAuth';
 import { downloadTextFile, loadFromStorage, printHtml, saveToStorage } from './services/persistence';
 import { createNurseRepo, createScheduleRepo, createUserRepo } from './services/repository';
 import { AuthUser, CandidateVisit, Filters, Nurse, RouteSuggestion, ScheduledVisit, SyncState, UserRecord, ViewMode, WeekdayJa } from './types';
-import { applyFilters, buildCandidateVisits, getAreaColors, getUnscheduledCandidates, groupByDate, minutesToTime, timeToMinutes } from './utils/calendar';
+import { applyFilters, buildCandidateVisits, extractAreaName, getAreaColors, getUnscheduledCandidates, groupByDate, minutesToTime, timeToMinutes } from './utils/calendar';
 import { parseCsv } from './utils/csv';
 import { START_MONTH, START_YEAR, WEEKDAY_LABELS, addMonths, formatDateKey, formatMonthLabel, getVisibleDays } from './utils/date';
 import { readCsvFileText } from './utils/fileText';
@@ -32,6 +32,11 @@ const today = new Date('2026-03-28T09:00:00');
 const defaultFilters: Filters = { keyword: '', area: '', insuranceType: '', nurseGender: '' };
 const HIDDEN_CANDIDATE_KEY = 'visit-calendar-hidden-candidates';
 const MOVED_CANDIDATE_KEY = 'visit-calendar-moved-candidates';
+const CURRENT_DATE_KEY = 'visit-calendar-current-date';
+const VIEW_MODE_KEY = 'visit-calendar-view-mode';
+const FILTERS_KEY = 'visit-calendar-filters';
+const SELECTED_NURSE_KEY = 'visit-calendar-selected-nurse';
+const CSV_DRAFT_KEY = 'visit-calendar-csv-draft';
 
 const userRepo = createUserRepo();
 const nurseRepo = createNurseRepo();
@@ -99,6 +104,13 @@ function applyCandidateCustomizations(candidates: CandidateVisit[], hiddenIds: s
     .map((candidate) => (overrides[candidate.slotId] ? { ...candidate, ...overrides[candidate.slotId] } : candidate));
 }
 
+function loadPersistedDate(): Date {
+  const raw = loadFromStorage<string | null>(CURRENT_DATE_KEY, null);
+  if (!raw) return new Date(START_YEAR, START_MONTH, today.getDate());
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? new Date(START_YEAR, START_MONTH, today.getDate()) : parsed;
+}
+
 function resolveMovedVisit(visit: CandidateVisit, targetDateKey: string, nurses: Nurse[]): CandidateVisit {
   const workerAvailability = buildWorkerAvailabilityForDate(nurses, targetDateKey);
   const duration = visit.endMinutes - visit.startMinutes;
@@ -140,27 +152,36 @@ function resolveMovedVisit(visit: CandidateVisit, targetDateKey: string, nurses:
 }
 
 export default function App() {
-  const [csvText, setCsvText] = useState(isDemoMode() ? sampleCsv : '');
+  const [csvText, setCsvText] = useState(() => {
+    if (isDemoMode()) return sampleCsv;
+    return loadFromStorage(CSV_DRAFT_KEY, '');
+  });
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [nurses, setNurses] = useState<Nurse[]>([]);
   const [scheduledMap, setScheduledMap] = useState<Record<string, ScheduledVisit>>({});
   const [hiddenCandidateIds, setHiddenCandidateIds] = useState<string[]>(() => loadFromStorage(HIDDEN_CANDIDATE_KEY, []));
   const [candidateOverrides, setCandidateOverrides] = useState<CandidateOverrideMap>(() => loadFromStorage(MOVED_CANDIDATE_KEY, {}));
-  const [filters, setFilters] = useState<Filters>(defaultFilters);
-  const [viewMode, setViewMode] = useState<ViewMode>('month');
-  const [currentDate, setCurrentDate] = useState(new Date(START_YEAR, START_MONTH, today.getDate()));
+  const [filters, setFilters] = useState<Filters>(() => loadFromStorage(FILTERS_KEY, defaultFilters));
+  const [viewMode, setViewMode] = useState<ViewMode>(() => loadFromStorage(VIEW_MODE_KEY, 'month'));
+  const [currentDate, setCurrentDate] = useState<Date>(() => loadPersistedDate());
   const [draggedSlotId, setDraggedSlotId] = useState('');
-  const [selectedNurseId, setSelectedNurseId] = useState('');
+  const [selectedNurseId, setSelectedNurseId] = useState(() => loadFromStorage(SELECTED_NURSE_KEY, ''));
   const [routeSuggestion, setRouteSuggestion] = useState<RouteSuggestion | null>(null);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [toast, setToast] = useState<{ message: string; tone: 'success' | 'error' } | null>(null);
   const [syncState, setSyncState] = useState<SyncState>({ provider: currentSyncProvider(), connected: currentSyncProvider() !== 'local' });
+  const [interactionVersion, setInteractionVersion] = useState(0);
 
   useEffect(() => subscribeAuth(setAuthUser), []);
   useEffect(() => saveToStorage(HIDDEN_CANDIDATE_KEY, hiddenCandidateIds), [hiddenCandidateIds]);
   useEffect(() => saveToStorage(MOVED_CANDIDATE_KEY, candidateOverrides), [candidateOverrides]);
+  useEffect(() => saveToStorage(FILTERS_KEY, filters), [filters]);
+  useEffect(() => saveToStorage(VIEW_MODE_KEY, viewMode), [viewMode]);
+  useEffect(() => saveToStorage(CURRENT_DATE_KEY, currentDate.toISOString()), [currentDate]);
+  useEffect(() => saveToStorage(SELECTED_NURSE_KEY, selectedNurseId), [selectedNurseId]);
+  useEffect(() => saveToStorage(CSV_DRAFT_KEY, csvText), [csvText]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -203,7 +224,7 @@ export default function App() {
   }, [authUser, users.length, nurses.length]);
 
   const visibleDays = useMemo(() => getVisibleDays(currentDate, viewMode), [currentDate, viewMode]);
-  const areaList = useMemo(() => Array.from(new Set(users.map((user) => user.居住地))).sort((a, b) => a.localeCompare(b, 'ja')), [users]);
+  const areaList = useMemo(() => Array.from(new Set(users.map((user) => extractAreaName(user.居住地)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ja')), [users]);
   const areaColors = useMemo(() => getAreaColors(areaList), [areaList]);
 
   const baseCandidateVisits = useMemo(() => buildCandidateVisits(users, visibleDays), [users, visibleDays]);
@@ -235,6 +256,10 @@ export default function App() {
 
   const showToast = (message: string, tone: 'success' | 'error' = 'success') => {
     setToast({ message, tone });
+  };
+
+  const refreshUi = () => {
+    setInteractionVersion((prev) => prev + 1);
   };
 
   const clearCandidateCustomizations = () => {
@@ -273,6 +298,7 @@ export default function App() {
     setCurrentDate(targetDate);
     setViewMode('month');
     setRouteSuggestion(null);
+    refreshUi();
     return { assignedCount: assigned.length, candidateCount: allCandidates.length, targetDate };
   };
 
@@ -293,6 +319,7 @@ export default function App() {
     }
 
     await scheduleRepo.clear();
+    refreshUi();
     showToast(`利用者CSVを更新しました（${parsed.length}件）`);
   };
 
@@ -327,6 +354,7 @@ export default function App() {
     }
 
     await scheduleRepo.clear();
+    refreshUi();
     showToast(`ワーカーCSVを更新しました（${parsed.length}名）`);
   };
 
@@ -358,6 +386,7 @@ export default function App() {
     }));
     setHiddenCandidateIds((prev) => prev.filter((id) => id !== slotId));
     setDraggedSlotId('');
+    refreshUi();
     showToast('候補の日時を更新しました');
   };
 
@@ -379,6 +408,7 @@ export default function App() {
     };
 
     await scheduleRepo.upsert(scheduled);
+    refreshUi();
     showToast(nurse ? `候補を確定しました（${nurse.name}）` : '候補を確定しました（未割当）');
   };
 
@@ -389,16 +419,19 @@ export default function App() {
       delete next[slotId];
       return next;
     });
+    refreshUi();
     showToast('候補を削除しました');
   };
 
   const handleRemoveScheduled = async (slotId: string) => {
     await scheduleRepo.remove(slotId);
+    refreshUi();
     showToast('確定スケジュールを削除しました');
   };
 
   const handleUpdateScheduled = async (visit: ScheduledVisit) => {
     await scheduleRepo.upsert(visit);
+    refreshUi();
     showToast('スケジュールを更新しました');
   };
 
@@ -406,12 +439,14 @@ export default function App() {
     const target = nurses.find((nurse) => nurse.id === id);
     if (!target || authUser?.role === 'nurse') return;
     await nurseRepo.upsert({ ...target, active: !target.active });
+    refreshUi();
     showToast('ワーカー情報を更新しました');
   };
 
   const handleAddNurse = async (nurse: Omit<Nurse, 'id'>) => {
     if (authUser?.role === 'nurse') return;
     await nurseRepo.upsert({ ...nurse, id: crypto.randomUUID() });
+    refreshUi();
     showToast('ワーカーを追加しました');
   };
 
@@ -422,6 +457,7 @@ export default function App() {
     setRouteSuggestion(suggestion);
     if (!suggestion) return;
     await Promise.all(suggestion.orderedVisits.map((visit) => scheduleRepo.upsert(visit)));
+    refreshUi();
   };
 
   const handleExportCsv = () => {
@@ -460,6 +496,7 @@ export default function App() {
     setCsvText('');
     setUsers([]);
     setRouteSuggestion(null);
+    refreshUi();
     showToast('利用者CSVを削除しました');
   };
 
@@ -468,6 +505,7 @@ export default function App() {
     await Promise.all([nurseRepo.clear(), scheduleRepo.clear()]);
     setNurses([]);
     setRouteSuggestion(null);
+    refreshUi();
     showToast('ワーカーCSVを削除しました');
   };
 
@@ -485,15 +523,18 @@ export default function App() {
       const next = new Date(currentDate);
       next.setDate(next.getDate() + delta);
       setCurrentDate(next);
+      refreshUi();
       return;
     }
     if (viewMode === 'week') {
       const next = new Date(currentDate);
       next.setDate(next.getDate() + delta * 7);
       setCurrentDate(next);
+      refreshUi();
       return;
     }
     setCurrentDate(addMonths(currentDate, delta));
+    refreshUi();
   };
 
   if (!authUser) {
@@ -523,7 +564,10 @@ export default function App() {
       <Toolbar
         periodLabel={formatMonthLabel(currentDate)}
         viewMode={viewMode}
-        onChangeViewMode={setViewMode}
+        onChangeViewMode={(mode) => {
+          setViewMode(mode);
+          refreshUi();
+        }}
         onPrev={() => navigate(-1)}
         onNext={() => navigate(1)}
         onExportCsv={handleExportCsv}
@@ -543,7 +587,7 @@ export default function App() {
         <aside className="sidebar">
           <section className="card panel">
             <h2>CSV 管理画面</h2>
-            <p className="helper-text">ワーカーCSVを読み込むと日別の看護師予定をカレンダー表示します。利用者候補はドラッグ＆ドロップで日付移動でき、ホバーした×で不要候補を削除できます。</p>
+            <p className="helper-text">ワーカーCSV読込後は日別の看護師予定を表示します。利用者候補はホバーで〇確定・×削除、ドラッグ＆ドロップで日付変更できます。各操作は自動保存され、再表示後も復元されます。</p>
             <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} rows={10} />
             <div className="toolbar-actions left">
               <button className="primary" onClick={() => applyCsvText(csvText).catch((error) => showToast(error instanceof Error ? error.message : '利用者CSVの反映に失敗しました。', 'error'))}>CSV反映</button>
@@ -561,15 +605,21 @@ export default function App() {
             onSignIn={handleSignIn}
             onSignOut={handleSignOut}
           />
-          <FiltersPanel filters={filters} areas={areaList} onChange={setFilters} />
+          <FiltersPanel filters={filters} areas={areaList} onChange={(next) => {
+            setFilters(next);
+            refreshUi();
+          }} />
           <NurseMasterPanel nurses={nurses} onToggleActive={handleToggleNurse} onAdd={handleAddNurse} onImportCsv={handleNurseCsvFile} onClearCsv={handleClearNurseCsv} />
           <AlertsPanel alerts={alerts} />
           <DocumentsDashboard items={documents} />
           <ConflictWarningsPanel warnings={warnings} />
           <ReportsPanel report={report} />
-          <RouteSuggestionPanel nurses={nurses} selectedNurseId={selectedNurseId} onSelectNurseId={setSelectedNurseId} route={routeSuggestion} onSuggest={handleSuggestRoute} />
-          <CandidateList visits={unscheduledCandidates} areaColors={areaColors} onDragStart={setDraggedSlotId} />
-          <ConfirmedSchedulePanel visits={scheduledVisits} nurses={nurses} onUpdate={handleUpdateScheduled} onRemove={handleRemoveScheduled} />
+          <RouteSuggestionPanel nurses={nurses} selectedNurseId={selectedNurseId} onSelectNurseId={(value) => {
+            setSelectedNurseId(value);
+            refreshUi();
+          }} route={routeSuggestion} onSuggest={handleSuggestRoute} />
+          <CandidateList key={`candidate-list-${interactionVersion}`} visits={unscheduledCandidates} areaColors={areaColors} onDragStart={setDraggedSlotId} />
+          <ConfirmedSchedulePanel key={`confirmed-list-${interactionVersion}`} visits={scheduledVisits} nurses={nurses} onUpdate={handleUpdateScheduled} onRemove={handleRemoveScheduled} />
         </aside>
         <main className="content">
           <section className="card panel note-card">
@@ -577,6 +627,7 @@ export default function App() {
             <p>看護師の月別希望時間、勤務曜日、午前/午後可否、訪問可能スキル、希望性別、同一時間帯重複、日次上限、同一エリア継続性を総合評価して最適割当します。</p>
           </section>
           <CalendarView
+            key={`calendar-${interactionVersion}-${formatDateKey(currentDate)}-${viewMode}`}
             days={visibleDays}
             candidatesByDate={candidatesByDate}
             scheduledByDate={scheduledByDate}
@@ -588,6 +639,7 @@ export default function App() {
             onRemoveCandidate={handleRemoveCandidate}
             onRemoveScheduled={handleRemoveScheduled}
             viewMode={viewMode}
+            periodLabel={formatMonthLabel(currentDate)}
           />
         </main>
       </div>

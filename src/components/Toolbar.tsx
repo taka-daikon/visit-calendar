@@ -16,7 +16,7 @@ export function Toolbar({ periodLabel, viewMode, onChangeViewMode, onPrev, onNex
     <header className="toolbar card">
       <div>
         <h1>訪問看護スケジューラ</h1>
-        <p>{periodLabel}</p>
+        <p className="toolbar-period-sub">現在表示: {periodLabel}</p>
       </div>
       <div className="toolbar-actions">
         <button onClick={onPrev}>← 前へ</button>
