@@ -77,25 +77,13 @@ button:hover { opacity: 0.95; }
 .removable:hover .hover-actions, .hover-actions:hover { opacity: 1; pointer-events: auto; }
 .hover-actions button { width: 30px; height: 30px; padding: 0; border-radius: 999px; display: grid; place-items: center; font-weight: 700; line-height: 1; }
 .hover-confirm { background: #dcfce7; border-color: #86efac; color: #166534; }
-.hover-edit { background: #ede9fe; border-color: #c4b5fd; color: #5b21b6; }
 .hover-remove { background: #fee2e2; border-color: #fecaca; color: #b91c1c; }
-.editing-card { padding-right: 8px; }
-.time-edit-panel { margin-top: 8px; padding: 8px; border-radius: 10px; background: #f8fafc; border: 1px solid #dbe2ea; }
-.dark-panel { background: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.18); }
-.time-edit-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.time-edit-row label { display: grid; gap: 4px; font-size: 11px; }
-.time-edit-row input { padding: 6px 8px; min-width: 0; }
-.time-edit-actions { display: flex; gap: 8px; margin-top: 8px; }
-.small-action { padding: 6px 10px; font-size: 12px; }
-.primary-soft { background: #dbeafe; border-color: #93c5fd; color: #1d4ed8; }
-.light-action { background: rgba(255, 255, 255, 0.18); border-color: rgba(255, 255, 255, 0.22); color: #ffffff; }
 .confirmed-zone { border-top: 1px dashed #cbd5e1; padding-top: 8px; }
 .confirmed-group { display: grid; gap: 6px; margin-bottom: 8px; }
 .confirmed-group-title { font-weight: 700; font-size: 12px; color: #166534; }
 .confirmed-fixed { background: linear-gradient(135deg, #047857, #065f46); border: 1px solid rgba(255, 255, 255, 0.18); box-shadow: 0 10px 20px rgba(6, 95, 70, 0.28); color: #ffffff; }
 .confirmed-fixed .calendar-item-sub, .confirmed-fixed .calendar-item-meta { color: rgba(236, 253, 245, 0.95); }
-.confirmed-actions { display: flex; flex-direction: column; gap: 6px; }
-.confirmed-edit, .confirmed-remove { background: rgba(255, 255, 255, 0.18); border-color: rgba(255, 255, 255, 0.22); color: #ffffff; width: 30px; height: 30px; padding: 0; border-radius: 999px; display: grid; place-items: center; }
+.confirmed-remove { background: rgba(255, 255, 255, 0.18); border-color: rgba(255, 255, 255, 0.22); color: #ffffff; }
 .status-overdue, .danger { border-color: #fecaca; background: #fff1f2; }
 .status-warning, .warning { border-color: #fde68a; background: #fffbeb; }
 .status-normal { border-color: #bbf7d0; background: #f0fdf4; }
@@ -108,7 +96,7 @@ button:hover { opacity: 0.95; }
 
 @media (max-width: 800px) {
   .toolbar, .calendar-panel-header { flex-direction: column; align-items: flex-start; }
-  .field-grid, .month-grid, .week-grid, .time-edit-row { grid-template-columns: 1fr; }
+  .field-grid, .month-grid, .week-grid { grid-template-columns: 1fr; }
   .calendar-period-chip { font-size: 20px; }
 }
 
