@@ -2,7 +2,6 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertsPanel } from './components/AlertsPanel';
 import { BusinessTabsPanel } from './components/BusinessTabsPanel';
 import { CalendarView } from './components/CalendarView';
-import { CandidateList } from './components/CandidateList';
 import { CloudSyncPanel } from './components/CloudSyncPanel';
 import { ConfirmedSchedulePanel } from './components/ConfirmedSchedulePanel';
 import { ConflictWarningsPanel } from './components/ConflictWarningsPanel';
@@ -317,6 +316,8 @@ export default function App() {
   const [interactionVersion, setInteractionVersion] = useState(0);
   const [scheduleHydrated, setScheduleHydrated] = useState(false);
   const [lastReloadAt, setLastReloadAt] = useState('初期表示');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [routeModalOpen, setRouteModalOpen] = useState(false);
   const previousBusinessIdRef = useRef(safeInitialBusinessId);
   const hydratingBusinessRef = useRef(false);
 
@@ -743,12 +744,21 @@ export default function App() {
 
   const handleSuggestRoute = async () => {
     const nurse = nurses.find((item) => item.id === selectedNurseId);
-    if (!nurse) return;
+    if (!nurse) {
+      showToast('最適訪問ルートを表示するには看護師を選択してください。', 'error');
+      return;
+    }
     const suggestion = await suggestOptimizedRoute(nurse, formatDateKey(currentDate), scheduledVisits);
     setRouteSuggestion(suggestion);
-    if (!suggestion) return;
+    if (!suggestion) {
+      setRouteModalOpen(false);
+      showToast('当日のFIX訪問が不足しているためルート提案を作成できませんでした。', 'error');
+      return;
+    }
     await Promise.all(suggestion.orderedVisits.map((visit) => scheduleRepo.upsert(visit)));
+    setRouteModalOpen(true);
     refreshUi();
+    showToast(`最適訪問ルートを更新しました（${suggestion.nurseName}）`);
   };
 
   const handleExportCsv = () => {
@@ -1042,6 +1052,21 @@ export default function App() {
   }, {}), [scheduledVisits]);
   const report = useMemo(() => buildMonthlyReport(effectiveCandidateVisits, scheduledVisits, routeKmByArea), [effectiveCandidateVisits, scheduledVisits, routeKmByArea]);
 
+  const scheduledCountByUserId = useMemo(() => scheduledVisits.reduce<Record<string, number>>((acc, visit) => {
+    acc[visit.userId] = (acc[visit.userId] ?? 0) + 1;
+    return acc;
+  }, {}), [scheduledVisits]);
+
+  const unassignedAlertRows = useMemo(() => Object.entries(candidatesByDate)
+    .filter(([, visits]) => visits.length > 0)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .slice(0, 6)
+    .map(([dateKey, visits]) => ({
+      dateKey,
+      count: visits.length,
+      users: visits.slice(0, 3).map((visit) => visit.userName)
+    })), [candidatesByDate]);
+
   if (!authUser) {
     return (
       <div className="login-shell">
@@ -1070,7 +1095,11 @@ export default function App() {
         periodLabel={formatMonthLabel(currentDate)}
         reloadLabel={lastReloadAt}
         businessName={currentBusinessName}
+        selectedNurseName={selectedNurseLabel}
+        authRole={authUser.role}
         viewMode={viewMode}
+        unassignedCount={unscheduledCandidates.length}
+        menuOpen={menuOpen}
         onChangeViewMode={(mode) => {
           setViewMode(mode);
           refreshUi();
@@ -1080,117 +1109,218 @@ export default function App() {
         onExportCsv={handleExportCsv}
         onExportPdf={handleExportPdf}
         onAutoAssign={handleAutoAssignClick}
+        onOpenRouteModal={() => {
+          handleSuggestRoute().catch((error) => showToast(error instanceof Error ? error.message : '最適訪問ルート提案に失敗しました。', 'error'));
+        }}
+        onToggleMenu={() => setMenuOpen((prev) => !prev)}
       />
 
-      <BusinessTabsPanel
-        businesses={businesses}
-        activeBusinessId={activeBusinessId}
-        newBusinessName={newBusinessName}
-        onChangeNewBusinessName={setNewBusinessName}
-        onAddBusiness={() => { handleAddBusiness().catch((error) => showToast(error instanceof Error ? error.message : '事業所追加に失敗しました。', 'error')); }}
-        onSwitchBusiness={(businessId) => { handleSwitchBusiness(businessId).catch((error) => showToast(error instanceof Error ? error.message : '事業所切替に失敗しました。', 'error')); }}
-      />
+      {menuOpen && (
+        <section className="hamburger-drawer card panel">
+          <div className="drawer-header split-line">
+            <div>
+              <h2>補助情報メニュー</h2>
+              <p className="helper-text">同期状態、期限アラート、月次情報はここにまとめています。</p>
+            </div>
+            <button onClick={() => setMenuOpen(false)}>閉じる</button>
+          </div>
+          <div className="drawer-grid">
+            <CloudSyncPanel
+              authUser={authUser}
+              syncState={syncState}
+              email={email}
+              password={password}
+              onChangeEmail={setEmail}
+              onChangePassword={setPassword}
+              onSignIn={handleSignIn}
+              onSignOut={handleSignOut}
+            />
+            <AlertsPanel alerts={alerts} />
+            <DocumentsDashboard items={documents} />
+            <ReportsPanel report={report} />
+            <ConflictWarningsPanel warnings={warnings} />
+          </div>
+        </section>
+      )}
 
-      <section className="stats-grid">
-        <article className="stat-card"><span>利用者数</span><strong>{users.length}</strong></article>
-        <article className="stat-card"><span>未割当候補</span><strong>{unscheduledCandidates.length}</strong></article>
-        <article className="stat-card"><span>確定訪問</span><strong>{scheduledVisits.length}</strong></article>
-        <article className="stat-card"><span>表示中の確定</span><strong>{visibleScheduledVisits.length}</strong></article>
-        <article className="stat-card"><span>看護師数</span><strong>{nurses.length}</strong></article>
-        <article className="stat-card"><span>重複警告</span><strong>{warnings.length}</strong></article>
+      {routeModalOpen && routeSuggestion && (
+        <div className="modal-backdrop" onClick={() => setRouteModalOpen(false)}>
+          <div className="modal-card route-modal-card" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header split-line">
+              <div>
+                <h2>最適訪問ルート提案</h2>
+                <p className="helper-text">エリア距離と希望時間帯をもとに並び替えた訪問順です。現在日は {routeSuggestion.dateKey}、担当は {routeSuggestion.nurseName} です。</p>
+              </div>
+              <button onClick={() => setRouteModalOpen(false)}>閉じる</button>
+            </div>
+            <RouteSuggestionPanel
+              nurses={nurses}
+              selectedNurseId={selectedNurseId}
+              onSelectNurseId={(value) => {
+                setSelectedNurseId(value);
+                setRouteSuggestion(null);
+                setRouteModalOpen(false);
+                refreshUi();
+              }}
+              route={routeSuggestion}
+              onSuggest={() => {
+                handleSuggestRoute().catch((error) => showToast(error instanceof Error ? error.message : '最適訪問ルート提案に失敗しました。', 'error'));
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      <section className="board-tabs-grid">
+        <BusinessTabsPanel
+          businesses={businesses}
+          activeBusinessId={activeBusinessId}
+          newBusinessName={newBusinessName}
+          onChangeNewBusinessName={setNewBusinessName}
+          onAddBusiness={() => { handleAddBusiness().catch((error) => showToast(error instanceof Error ? error.message : '事業所追加に失敗しました。', 'error')); }}
+          onSwitchBusiness={(businessId) => {
+            setMenuOpen(false);
+            setRouteModalOpen(false);
+            handleSwitchBusiness(businessId).catch((error) => showToast(error instanceof Error ? error.message : '事業所切替に失敗しました。', 'error'));
+          }}
+        />
+
+        <NurseShiftTabsPanel
+          nurses={nurses}
+          selectedNurseId={selectedNurseId}
+          onSelectNurseId={(value) => {
+            setSelectedNurseId(value);
+            setRouteSuggestion(null);
+            setRouteModalOpen(false);
+            refreshUi();
+          }}
+        />
+
+        <DraftManagerPanel
+          draftName={draftName}
+          onChangeDraftName={setDraftName}
+          onSaveDraft={handleSaveDraft}
+          drafts={businessDrafts}
+          onRestoreDraft={(draftId) => {
+            setRouteModalOpen(false);
+            handleRestoreDraft(draftId).catch((error) => showToast(error instanceof Error ? error.message : '下書き復元に失敗しました。', 'error'));
+          }}
+          onDeleteDraft={handleDeleteDraft}
+        />
       </section>
 
-      <section className="top-control-grid">
-        <section className="card panel csv-panel">
-          <h2>CSV 管理画面</h2>
-          <p className="helper-text">利用者CSVと看護師CSVの読込は上部に集約し、左側の占有を減らしました。時間編集後の表示は即時反映され、〇で確定すると濃いFIX表示へ切り替わります。</p>
-          <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} rows={7} />
+      <section className="scheduler-top-row">
+        <section className="stats-grid board-summary-grid">
+          <article className="stat-card"><span>利用者数</span><strong>{users.length}</strong></article>
+          <article className="stat-card"><span>未割当候補</span><strong>{unscheduledCandidates.length}</strong></article>
+          <article className="stat-card"><span>FIX訪問</span><strong>{scheduledVisits.length}</strong></article>
+          <article className="stat-card"><span>表示中FIX</span><strong>{visibleScheduledVisits.length}</strong></article>
+          <article className="stat-card"><span>看護師数</span><strong>{nurses.length}</strong></article>
+          <article className="stat-card"><span>重複警告</span><strong>{warnings.length}</strong></article>
+        </section>
+        <div className="top-right-filter-wrap">
+          <FiltersPanel filters={filters} areas={areaList} onChange={(next) => {
+            setFilters(next);
+            refreshUi();
+          }} />
+        </div>
+      </section>
+
+      {unscheduledCandidates.length > 0 && (
+        <section className="card panel unassigned-alert-panel">
+          <div className="split-line unassigned-alert-header">
+            <div>
+              <h2>未割当候補アラート</h2>
+              <p className="helper-text">未確定候補が残っています。看護師シフトに合わせてドラッグし、○でFIX化してください。</p>
+            </div>
+            <div className="alert-count-badge">{unscheduledCandidates.length}件</div>
+          </div>
+          <div className="unassigned-alert-list">
+            {unassignedAlertRows.map((row) => (
+              <article key={row.dateKey} className="mini-card unassigned-alert-card">
+                <strong>{row.dateKey}</strong>
+                <div>{row.count}件未割当</div>
+                <div className="card-subtext">{row.users.join(' / ')}{row.count > row.users.length ? ' …' : ''}</div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <main className="scheduler-main">
+        <CalendarView
+          key={`calendar-${interactionVersion}-${formatDateKey(currentDate)}-${viewMode}-${activeBusinessId}`}
+          days={visibleDays}
+          candidatesByDate={candidatesByDate}
+          scheduledByDate={scheduledByDate}
+          workerAvailabilityByDate={workerAvailabilityByDate}
+          areaColors={areaColors}
+          onDragStart={setDraggedSlotId}
+          onDragStartWorkerShift={setDraggedWorkerShiftId}
+          onDropCandidate={handleMoveCandidate}
+          onDropWorkerShift={(dateKey, shiftId) => { handleMoveWorkerShift(dateKey, shiftId).catch((error) => showToast(error instanceof Error ? error.message : '看護師シフト移動に失敗しました。', 'error')); }}
+          onConfirmCandidate={handleConfirmCandidate}
+          onRemoveCandidate={handleRemoveCandidate}
+          onRemoveScheduled={handleRemoveScheduled}
+          onConfirmWorkerShift={(shiftId) => { handleConfirmWorkerShift(shiftId).catch((error) => showToast(error instanceof Error ? error.message : '看護師シフト確定に失敗しました。', 'error')); }}
+          onRemoveWorkerShift={(shiftId) => { handleRemoveWorkerShift(shiftId).catch((error) => showToast(error instanceof Error ? error.message : '看護師シフト削除に失敗しました。', 'error')); }}
+          onUpdateCandidateTime={handleUpdateCandidateTime}
+          onUpdateScheduledTime={handleUpdateScheduledTime}
+          onUpdateWorkerShiftTime={(shiftId, start, end) => { handleUpdateWorkerShiftTime(shiftId, start, end).catch((error) => showToast(error instanceof Error ? error.message : '看護師シフト時間更新に失敗しました。', 'error')); }}
+          viewMode={viewMode}
+          periodLabel={formatMonthLabel(currentDate)}
+          selectedNurseName={selectedNurseLabel}
+        />
+      </main>
+
+      <section className="scheduler-footer-grid">
+        <section className="card panel csv-panel footer-panel">
+          <h2>CSV取込</h2>
+          <p className="helper-text">利用者CSVと看護師CSV、初期登録や更新作業はフッターへ集約しました。</p>
+          <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} rows={8} />
           <div className="toolbar-actions left csv-actions-wrap">
             <button className="primary" onClick={() => applyCsvText(csvText).catch((error) => showToast(error instanceof Error ? error.message : '利用者CSVの反映に失敗しました。', 'error'))}>利用者CSV反映</button>
             <input type="file" accept=".csv,text/csv" onChange={handleCsvFile} />
             <button onClick={handleClearUsersCsv}>利用者CSV削除</button>
           </div>
+          <div className="toolbar-actions left csv-actions-wrap nurse-csv-row">
+            <input type="file" accept=".csv,text/csv" onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (!file) return;
+              handleNurseCsvFile(file).catch((error) => showToast(error instanceof Error ? error.message : '看護師CSVの反映に失敗しました。', 'error'));
+              event.currentTarget.value = '';
+            }} />
+            <button onClick={handleClearNurseCsv}>看護師CSV削除</button>
+          </div>
         </section>
-        <div className="top-control-stack">
-          <DraftManagerPanel
-            draftName={draftName}
-            onChangeDraftName={setDraftName}
-            onSaveDraft={handleSaveDraft}
-            drafts={businessDrafts}
-            onRestoreDraft={(draftId) => { handleRestoreDraft(draftId).catch((error) => showToast(error instanceof Error ? error.message : '下書き復元に失敗しました。', 'error')); }}
-            onDeleteDraft={handleDeleteDraft}
-          />
-          <NurseShiftTabsPanel
-            nurses={nurses}
-            selectedNurseId={selectedNurseId}
-            onSelectNurseId={(value) => {
-              setSelectedNurseId(value);
-              setRouteSuggestion(null);
-              refreshUi();
-            }}
-          />
-        </div>
-      </section>
 
-      <div className="main-grid">
-        <aside className="sidebar">
-          <CloudSyncPanel
-            authUser={authUser}
-            syncState={syncState}
-            email={email}
-            password={password}
-            onChangeEmail={setEmail}
-            onChangePassword={setPassword}
-            onSignIn={handleSignIn}
-            onSignOut={handleSignOut}
-          />
-          <FiltersPanel filters={filters} areas={areaList} onChange={(next) => {
-            setFilters(next);
-            refreshUi();
-          }} />
-          <NurseMasterPanel nurses={nurses} onToggleActive={handleToggleNurse} onAdd={handleAddNurse} onImportCsv={handleNurseCsvFile} onClearCsv={handleClearNurseCsv} />
-          <AlertsPanel alerts={alerts} />
-          <DocumentsDashboard items={documents} />
-          <ConflictWarningsPanel warnings={warnings} />
-          <ReportsPanel report={report} />
-          <RouteSuggestionPanel nurses={nurses} selectedNurseId={selectedNurseId} onSelectNurseId={(value) => {
-            setSelectedNurseId(value);
-            setRouteSuggestion(null);
-            refreshUi();
-          }} route={routeSuggestion} onSuggest={handleSuggestRoute} />
-          <CandidateList key={`candidate-list-${interactionVersion}`} visits={unscheduledCandidates} areaColors={areaColors} onDragStart={setDraggedSlotId} />
-          <ConfirmedSchedulePanel key={`confirmed-list-${interactionVersion}`} visits={visibleScheduledVisits} nurses={nurses} onUpdate={handleUpdateScheduled} onRemove={handleRemoveScheduled} />
-        </aside>
-        <main className="content">
-          <section className="card panel note-card">
-            <h2>自動割当ロジック</h2>
-            <p>看護師の月別希望時間、勤務曜日、午前/午後可否、訪問可能スキル、希望性別、同一時間帯重複、日次上限、同一エリア継続性を総合評価して最適割当します。各クリック・選択後は画面を即時再読込し、FIX色・確定欄・下書き保存へ反映します。</p>
-          </section>
-          <CalendarView
-            key={`calendar-${interactionVersion}-${formatDateKey(currentDate)}-${viewMode}-${activeBusinessId}`}
-            days={visibleDays}
-            candidatesByDate={candidatesByDate}
-            scheduledByDate={scheduledByDate}
-            workerAvailabilityByDate={workerAvailabilityByDate}
-            areaColors={areaColors}
-            onDragStart={setDraggedSlotId}
-            onDragStartWorkerShift={setDraggedWorkerShiftId}
-            onDropCandidate={handleMoveCandidate}
-            onDropWorkerShift={(dateKey, shiftId) => { handleMoveWorkerShift(dateKey, shiftId).catch((error) => showToast(error instanceof Error ? error.message : '看護師シフト移動に失敗しました。', 'error')); }}
-            onConfirmCandidate={handleConfirmCandidate}
-            onRemoveCandidate={handleRemoveCandidate}
-            onRemoveScheduled={handleRemoveScheduled}
-            onConfirmWorkerShift={(shiftId) => { handleConfirmWorkerShift(shiftId).catch((error) => showToast(error instanceof Error ? error.message : '看護師シフト確定に失敗しました。', 'error')); }}
-            onRemoveWorkerShift={(shiftId) => { handleRemoveWorkerShift(shiftId).catch((error) => showToast(error instanceof Error ? error.message : '看護師シフト削除に失敗しました。', 'error')); }}
-            onUpdateCandidateTime={handleUpdateCandidateTime}
-            onUpdateScheduledTime={handleUpdateScheduledTime}
-            onUpdateWorkerShiftTime={(shiftId, start, end) => { handleUpdateWorkerShiftTime(shiftId, start, end).catch((error) => showToast(error instanceof Error ? error.message : '看護師シフト時間更新に失敗しました。', 'error')); }}
-            viewMode={viewMode}
-            periodLabel={formatMonthLabel(currentDate)}
-            selectedNurseName={selectedNurseLabel}
-          />
-        </main>
-      </div>
+        <section className="card panel footer-users-panel">
+          <div className="split-line">
+            <div>
+              <h2>利用者一覧</h2>
+              <p className="helper-text">担当件数とエリアを確認しながら、カレンダー操作へ戻れます。</p>
+            </div>
+            <span className="badge footer-badge">{users.length}名</span>
+          </div>
+          <div className="compact-list scrollable-list footer-list">
+            {users.length === 0 && <p className="empty">利用者はまだ読み込まれていません。</p>}
+            {users.map((user) => (
+              <article key={user.id} className="mini-card footer-user-card">
+                <div className="split-line">
+                  <strong>{user.利用者名}</strong>
+                  <span className="badge footer-badge subtle">FIX {scheduledCountByUserId[user.id] ?? 0}</span>
+                </div>
+                <div>{user.居住地}</div>
+                <div className="card-subtext">{user.保険区分} / 希望: {user.希望曜日 || '未設定'} / 処置: {user.希望処置内容}</div>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <NurseMasterPanel nurses={nurses} onToggleActive={handleToggleNurse} onAdd={handleAddNurse} onImportCsv={handleNurseCsvFile} onClearCsv={handleClearNurseCsv} />
+
+        <ConfirmedSchedulePanel key={`confirmed-list-${interactionVersion}`} visits={visibleScheduledVisits} nurses={nurses} onUpdate={handleUpdateScheduled} onRemove={handleRemoveScheduled} />
+      </section>
     </div>
   );
 }

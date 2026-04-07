@@ -37,6 +37,8 @@ interface Props {
   selectedNurseName: string;
 }
 
+const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土'];
+
 function groupVisitsByAddress<T extends CandidateVisit | ScheduledVisit>(visits: T[]): Array<{ address: string; visits: T[] }> {
   const grouped = visits.reduce<Record<string, T[]>>((acc, visit) => {
     const key = (visit.address || visit.area || '住所未設定').trim();
@@ -141,27 +143,34 @@ export function CalendarView({
   };
 
   return (
-    <section className="card panel">
-      <header className="calendar-panel-header">
+    <section className="card panel calendar-board-panel">
+      <header className="calendar-panel-header whiteboard-header">
         <div>
-          <h2>カレンダービュー</h2>
-          <p className="helper-text">利用者も看護師も、BOX上で時間表示を明確にし、10分単位の変更・ドラッグ＆ドロップ・確定・削除に対応しました。現在のシフト表示: {selectedNurseName}</p>
+          <h2>ホワイトボードスケジュール</h2>
+          <p className="helper-text">マグネット感覚で看護師シフトと候補を動かし、その場で時間変更、○で確定、×で削除できます。表示中: {selectedNurseName}</p>
         </div>
-        <div className="calendar-period-chip">【{periodLabel}】</div>
+        <div className="calendar-header-right">
+          <div className="calendar-period-chip">{periodLabel}</div>
+          <div className="calendar-legend">
+            <span className="legend-chip legend-worker">看護師</span>
+            <span className="legend-chip legend-candidate">未割当</span>
+            <span className="legend-chip legend-fixed">FIX</span>
+          </div>
+        </div>
       </header>
+
       <div className={className}>
         {days.map((day) => {
           const dayCandidates = candidateGroupsByDate[day.dateKey] ?? [];
           const dayScheduledGroups = scheduledGroupsByDate[day.dateKey] ?? [];
           const dayScheduledCount = scheduledByDate[day.dateKey]?.length ?? 0;
           const dayWorkers = workerAvailabilityByDate[day.dateKey] ?? [];
-          const cellColor = day.weekdayIndex === 6 ? '#E6F0FF' : day.weekdayIndex === 0 ? '#FFE6E6' : '#FFFFFF';
+          const cellTone = day.weekdayIndex === 6 ? 'tone-sat' : day.weekdayIndex === 0 ? 'tone-sun' : 'tone-weekday';
 
           return (
             <article
               key={day.dateKey}
-              className={`calendar-cell ${day.inMonth ? '' : 'muted'}`}
-              style={{ background: cellColor }}
+              className={`calendar-cell whiteboard-cell ${cellTone} ${day.inMonth ? '' : 'muted'}`}
               onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => {
                 e.preventDefault();
@@ -177,9 +186,15 @@ export function CalendarView({
                 onDropCandidate(day.dateKey, payload || undefined);
               }}
             >
-              <header className="split-line"><strong>{day.date.getDate()}日</strong><span>{dayScheduledCount}件確定</span></header>
+              <header className="calendar-cell-header">
+                <div>
+                  <strong>{day.date.getDate()}日 ({WEEKDAY_LABELS[day.weekdayIndex]})</strong>
+                  <div className="calendar-cell-date">{day.dateKey}</div>
+                </div>
+                <span className="day-fixed-chip">FIX {dayScheduledCount}</span>
+              </header>
 
-              <div className="calendar-section">
+              <div className="calendar-section worker-section">
                 <div className="section-title">看護師シフト</div>
                 {dayWorkers.length === 0 && <div className="empty small">シフトなし</div>}
                 {dayWorkers.map((shift) => {
@@ -187,7 +202,7 @@ export function CalendarView({
                   return (
                     <div
                       key={shift.shiftId}
-                      className={`calendar-item worker-slot removable ${shift.fixed ? 'worker-fixed' : ''} ${isEditing ? 'editing-card' : ''}`}
+                      className={`calendar-item worker-slot removable magnet-card ${shift.fixed ? 'worker-fixed' : ''} ${isEditing ? 'editing-card' : ''}`}
                       draggable={!isEditing}
                       onDragStart={(e) => {
                         if (isEditing) return;
@@ -198,8 +213,8 @@ export function CalendarView({
                     >
                       <div className="calendar-item-body">
                         <div className="calendar-item-title">[{shift.start}-{shift.end}] {shift.nurseName}</div>
-                        <div className="calendar-item-sub">看護師シフトBOX {shift.fixed ? ' / FIX済み' : ''}</div>
-                        <div className="calendar-item-meta">時間を直接確認しながら編集できます</div>
+                        <div className="calendar-item-sub">{shift.fixed ? 'FIX済みシフト' : 'ドラッグで別日へ移動可能'}</div>
+                        <div className="calendar-item-meta">時間確認しながら直接編集</div>
                         {isEditing && (
                           <div className={`time-edit-panel ${shift.fixed ? 'dark-panel' : ''}`}>
                             <div className="time-edit-current">現在: {shift.start} - {shift.end}</div>
@@ -232,11 +247,11 @@ export function CalendarView({
                 })}
               </div>
 
-              <div className="calendar-section">
+              <div className="calendar-section candidate-section">
                 <div className="section-title">未割当候補</div>
                 {dayCandidates.length === 0 && <div className="empty small">候補なし</div>}
                 {dayCandidates.map((group) => (
-                  <div key={`${day.dateKey}-${group.address}`} className="address-group-card">
+                  <div key={`${day.dateKey}-${group.address}`} className="address-group-card candidate-group-card">
                     <div className="address-group-header">
                       <strong>{group.address}</strong>
                       <span>{group.visits.length}件</span>
@@ -247,7 +262,7 @@ export function CalendarView({
                         return (
                           <div
                             key={visit.slotId}
-                            className={`calendar-item candidate removable ${isEditing ? 'editing-card' : ''}`}
+                            className={`calendar-item candidate removable magnet-card ${isEditing ? 'editing-card' : ''}`}
                             draggable={!isEditing}
                             onDragStart={(e) => {
                               if (isEditing) return;
@@ -260,7 +275,7 @@ export function CalendarView({
                             <div className="calendar-item-body">
                               <div className="calendar-item-title">[{visit.start}-{visit.end}] {visit.userName}</div>
                               <div className="calendar-item-sub">{visit.address || visit.area}</div>
-                              <div className="calendar-item-meta">時間: {visit.start} - {visit.end} / 担当エリア: {visit.area}</div>
+                              <div className="calendar-item-meta">担当エリア: {visit.area} / {visit.treatment}</div>
                               {isEditing && (
                                 <div className="time-edit-panel">
                                   <div className="time-edit-current">現在: {visit.start} - {visit.end}</div>
@@ -297,7 +312,7 @@ export function CalendarView({
               </div>
 
               <div className="calendar-section confirmed-zone">
-                <div className="section-title">確定</div>
+                <div className="section-title">FIX済み</div>
                 {dayScheduledGroups.length === 0 && <div className="empty small">確定なし</div>}
                 {dayScheduledGroups.map((group) => (
                   <div key={`${day.dateKey}-confirmed-${group.address}`} className="address-group-card confirmed-address-group">
@@ -309,11 +324,11 @@ export function CalendarView({
                       {group.visits.map((visit) => {
                         const isEditing = editingScheduledId === visit.slotId;
                         return (
-                          <div key={visit.slotId} className={`calendar-item confirmed confirmed-fixed ${isEditing ? 'editing-card' : ''}`} style={{ borderLeftColor: areaColors[visit.area] ?? '#cbd5e1' }}>
+                          <div key={visit.slotId} className={`calendar-item confirmed confirmed-fixed magnet-card ${isEditing ? 'editing-card' : ''}`} style={{ borderLeftColor: areaColors[visit.area] ?? '#cbd5e1' }}>
                             <div className="calendar-item-body">
                               <div className="calendar-item-title">【FIX】[{visit.start}-{visit.end}] {visit.userName}</div>
                               <div className="calendar-item-sub">{visit.address || visit.area}</div>
-                              <div className="calendar-item-meta">時間: {visit.start} - {visit.end} / 担当: {visit.nurseName || '未割当'} / エリア: {visit.area}</div>
+                              <div className="calendar-item-meta">担当: {visit.nurseName || '未割当'} / エリア: {visit.area}</div>
                               {isEditing && (
                                 <div className="time-edit-panel dark-panel">
                                   <div className="time-edit-current">現在: {visit.start} - {visit.end}</div>
