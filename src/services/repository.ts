@@ -1,5 +1,5 @@
 import { collection, deleteDoc, doc, getDocs, onSnapshot, setDoc } from 'firebase/firestore';
-import { Nurse, ScheduledVisit, SyncProvider, UserRecord } from '../types';
+import { Nurse, ScheduledVisit, SyncProvider, UserArchiveRecord, UserRecord } from '../types';
 import { getFirebaseServices } from './firebaseApp';
 import { currentSyncProvider, isDemoMode } from './appEnv';
 import { loadFromStorage, saveToStorage } from './persistence';
@@ -85,6 +85,11 @@ export function createScheduleRepo(): RealtimeRepo<ScheduledVisit> {
 export function createUserRepo(): RealtimeRepo<UserRecord> {
   if (isDemoMode()) return createLocalRepo<UserRecord>('visit-calendar.demo.users');
   return createFirebaseRepo<UserRecord>('users') ?? createLocalRepo<UserRecord>('visit-calendar.users');
+}
+
+export function createUserArchiveRepo(): RealtimeRepo<UserArchiveRecord> {
+  if (isDemoMode()) return createLocalRepo<UserArchiveRecord>('visit-calendar.demo.user-archive');
+  return createFirebaseRepo<UserArchiveRecord>('user_archive') ?? createLocalRepo<UserArchiveRecord>('visit-calendar.user-archive');
 }
 
 export function createNurseRepo(): RealtimeRepo<Nurse> {

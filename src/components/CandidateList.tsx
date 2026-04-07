@@ -4,9 +4,26 @@ interface Props {
   visits: CandidateVisit[];
   areaColors: Record<string, string>;
   onDragStart: (slotId: string) => void;
+  duplicateUserIds: string[];
+  duplicateUserTooltips: Record<string, string[]>;
 }
 
-export function CandidateList({ visits, areaColors, onDragStart }: Props) {
+export function CandidateList({ visits, areaColors, onDragStart, duplicateUserIds, duplicateUserTooltips }: Props) {
+  const duplicateIdSet = new Set(duplicateUserIds);
+  const renderDuplicateBadge = (userId: string) => {
+    const labels = duplicateUserTooltips[userId] ?? [];
+    if (!labels.length) return null;
+    return (
+      <span className="duplicate-warning-badge" role="note" tabIndex={0}>
+        ⚠ 重複
+        <span className="duplicate-warning-tooltip">
+          {labels.map((label) => (
+            <span key={`${userId}-${label}`} className="duplicate-warning-tooltip-line">{label}</span>
+          ))}
+        </span>
+      </span>
+    );
+  };
   return (
     <section className="card panel">
       <h2>未割当候補 ({visits.length})</h2>
@@ -15,7 +32,7 @@ export function CandidateList({ visits, areaColors, onDragStart }: Props) {
         {visits.map((visit) => (
           <article
             key={visit.slotId}
-            className="visit-card"
+            className={`visit-card ${duplicateIdSet.has(visit.userId) ? 'duplicate-user-box' : ''}`}
             draggable
             onDragStart={(e) => {
               e.dataTransfer.effectAllowed = 'move';
@@ -27,6 +44,7 @@ export function CandidateList({ visits, areaColors, onDragStart }: Props) {
             <div className="split-line">
               <div>
                 <strong>{visit.userName}</strong>
+                {renderDuplicateBadge(visit.userId)}
                 <div className="card-subtext">{visit.address || visit.area}</div>
                 {visit.preferredNurseName && <div className="card-subtext">担当看護師: {visit.preferredNurseName}</div>}
               </div>

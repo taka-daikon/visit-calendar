@@ -21,8 +21,8 @@ import { sampleNurses } from './data/sampleNurses';
 import { currentSyncProvider, isDemoMode } from './services/appEnv';
 import { signIn, signOutUser, subscribeAuth } from './services/firebaseAuth';
 import { downloadTextFile, loadFromStorage, printHtml, saveToStorage } from './services/persistence';
-import { createNurseRepo, createScheduleRepo, createUserRepo } from './services/repository';
-import { AuthUser, CandidateVisit, Filters, Nurse, NurseShiftEntry, RouteSuggestion, ScheduledVisit, SyncState, UserRecord, ViewMode, WeekdayJa } from './types';
+import { createNurseRepo, createScheduleRepo, createUserArchiveRepo, createUserRepo } from './services/repository';
+import { AuthUser, CandidateVisit, Filters, Nurse, NurseShiftEntry, RouteSuggestion, ScheduledVisit, SyncState, UserArchiveRecord, UserRecord, ViewMode, WeekdayJa } from './types';
 import { applyFilters, buildCandidateVisits, expandTimeRange, extractAreaName, getAreaColors, getUnscheduledCandidates, groupByDate, minutesToTime, timeToMinutes } from './utils/calendar';
 import { parseCsv } from './utils/csv';
 import { START_MONTH, START_YEAR, WEEKDAY_LABELS, addMonths, formatDateKey, formatMonthLabel, getVisibleDays } from './utils/date';
@@ -157,6 +157,7 @@ function buildUserDraftForDate(dateKey: string): UserRecord {
 }
 
 const userRepo = createUserRepo();
+const userArchiveRepo = createUserArchiveRepo();
 const nurseRepo = createNurseRepo();
 const scheduleRepo = createScheduleRepo();
 
@@ -407,6 +408,7 @@ export default function App() {
   const [savedDrafts, setSavedDrafts] = useState<SavedScheduleDraft[]>(() => loadFromStorage<SavedScheduleDraft[]>(SAVED_DRAFTS_KEY, []));
   const [csvText, setCsvText] = useState(() => initialSnapshot?.csvText ?? (isDemoMode() ? sampleCsv : loadFromStorage(CSV_DRAFT_KEY, '')));
   const [users, setUsers] = useState<UserRecord[]>(() => initialSnapshot?.users ?? []);
+  const [archivedUsers, setArchivedUsers] = useState<UserArchiveRecord[]>([]);
   const [nurses, setNurses] = useState<Nurse[]>(() => initialSnapshot?.nurses ?? []);
   const [scheduledMap, setScheduledMap] = useState<Record<string, ScheduledVisit>>(() => scheduledMapFromVisits(initialSnapshot?.scheduledVisits ?? []));
   const [hiddenCandidateIds, setHiddenCandidateIds] = useState<string[]>(() => initialSnapshot?.hiddenCandidateIds ?? loadFromStorage(HIDDEN_CANDIDATE_KEY, []));
@@ -445,6 +447,78 @@ export default function App() {
 
   const showToast = (message: string, tone: 'success' | 'error' = 'success') => {
     setToast({ message, tone });
+  };
+
+  const buildArchiveRecord = (user: UserRecord, deleted = false) => {
+    const now = new Date().toISOString();
+    const normalized = normalizeUserRecord(user);
+    return {
+      ...normalized,
+      id: `${activeBusinessId}::${normalized.id}`,
+      sourceUserId: normalized.id,
+      businessId: activeBusinessId,
+      businessName: currentBusinessName,
+      deleted,
+      deletedAt: deleted ? now : undefined,
+      archivedAt: now
+    } satisfies UserArchiveRecord;
+  };
+
+  const syncUserArchiveForBusiness = async (nextUsers: UserRecord[], previousUsers: UserRecord[] = users) => {
+    const nextIds = new Set(nextUsers.map((item) => item.id));
+    const removedUsers = previousUsers.filter((item) => !nextIds.has(item.id));
+    await Promise.all([
+      ...nextUsers.map((item) => userArchiveRepo.upsert(buildArchiveRecord(item, false))),
+      ...removedUsers.map((item) => userArchiveRepo.upsert(buildArchiveRecord(item, true)))
+    ]);
+  };
+
+  const getEffectiveCandidates = () => {
+    const nextVisibleDays = getVisibleDays(currentDate, viewMode);
+    return applyCandidateCustomizations(buildCandidateVisits(users, nextVisibleDays), hiddenCandidateIds, candidateOverrides);
+  };
+
+  const confirmCandidateAsFixed = async (slotId: string, targetDateKey?: string) => {
+    const effectiveCandidateVisits = getEffectiveCandidates();
+    const currentVisit = effectiveCandidateVisits.find((item) => item.slotId === slotId);
+    if (!currentVisit) {
+      throw new Error('候補が見つかりませんでした。');
+    }
+
+    const visit = targetDateKey ? resolveMovedVisit(currentVisit, targetDateKey, nurses) : currentVisit;
+    if (targetDateKey) {
+      setCandidateOverrides((prev) => ({
+        ...prev,
+        [slotId]: {
+          ...prev[slotId],
+          dateKey: visit.dateKey,
+          weekday: visit.weekday,
+          start: visit.start,
+          end: visit.end,
+          startMinutes: visit.startMinutes,
+          endMinutes: visit.endMinutes
+        }
+      }));
+    }
+
+    const committedVisits = Object.values(scheduledMap).filter((item) => item.slotId !== slotId);
+    const { nurse, score } = autoAssignNurse(visit, nurses, committedVisits);
+    const scheduled: ScheduledVisit = {
+      ...visit,
+      confirmedAt: new Date().toISOString(),
+      nurseId: nurse?.id,
+      nurseName: nurse?.name,
+      assignmentScore: score,
+      manuallyEdited: true
+    };
+
+    await scheduleRepo.upsert(scheduled);
+    setScheduledMap((prev) => ({ ...prev, [slotId]: scheduled }));
+    setHiddenCandidateIds((prev) => (prev.includes(slotId) ? prev : [...prev, slotId]));
+    setDraggedSlotId('');
+    setRouteSuggestion(null);
+    refreshUi();
+    return { scheduled, nurse };
   };
 
   const refreshUi = () => {
@@ -531,10 +605,16 @@ export default function App() {
     if (!sourceNurses.length) throw new Error('先にワーカーCSVを反映してください。');
 
     const targetDate = resolveTargetMonth(sourceNurses, baseDate);
+    const targetMonthKey = formatDateKey(new Date(targetDate.getFullYear(), targetDate.getMonth(), 1)).slice(0, 7);
     const allCandidates = buildCustomizedMonthCandidates(sourceUsers, sourceNurses, targetDate);
-    const assigned: ScheduledVisit[] = [];
+    const preservedFixedVisits = Object.values(scheduledMap)
+      .filter((visit) => visit.dateKey.startsWith(targetMonthKey))
+      .map((visit) => ({ ...visit, manuallyEdited: true }));
+    const preservedSlotIds = new Set(preservedFixedVisits.map((visit) => visit.slotId));
+    const remainingCandidates = allCandidates.filter((visit) => !preservedSlotIds.has(visit.slotId));
+    const assigned: ScheduledVisit[] = [...preservedFixedVisits];
 
-    allCandidates.forEach((visit) => {
+    remainingCandidates.forEach((visit) => {
       const { nurse, score } = autoAssignNurse(visit, sourceNurses, assigned);
       if (!nurse) return;
       assigned.push({
@@ -549,6 +629,7 @@ export default function App() {
 
     await scheduleRepo.clear();
     await Promise.all(assigned.map((visit) => scheduleRepo.upsert(visit)));
+    setScheduledMap(scheduledMapFromVisits(assigned));
     setCurrentDate(targetDate);
     setViewMode('month');
     setRouteSuggestion(null);
@@ -565,6 +646,7 @@ export default function App() {
     setUsers(parsed);
     await userRepo.clear();
     await Promise.all(parsed.map((user) => userRepo.upsert(user)));
+    await syncUserArchiveForBusiness(parsed, users);
 
     if (nurses.length) {
       const result = await runAutoAssignment(parsed, nurses, resolveTargetMonth(nurses, currentDate));
@@ -573,6 +655,7 @@ export default function App() {
     }
 
     await scheduleRepo.clear();
+    setScheduledMap({});
     refreshUi();
     showToast(`利用者CSVを更新しました（${parsed.length}件）`);
   };
@@ -608,6 +691,7 @@ export default function App() {
     }
 
     await scheduleRepo.clear();
+    setScheduledMap({});
     refreshUi();
     showToast(`ワーカーCSVを更新しました（${parsed.length}名）`);
   };
@@ -647,27 +731,23 @@ export default function App() {
   };
 
   const handleConfirmCandidate = async (slotId: string) => {
-    const visibleDays = getVisibleDays(currentDate, viewMode);
-    const effectiveCandidateVisits = applyCandidateCustomizations(buildCandidateVisits(users, visibleDays), hiddenCandidateIds, candidateOverrides);
-    const visit = effectiveCandidateVisits.find((item) => item.slotId === slotId);
-    if (!visit) {
-      showToast('候補が見つかりませんでした。', 'error');
-      return;
+    try {
+      const { nurse } = await confirmCandidateAsFixed(slotId);
+      showToast(nurse ? `候補をFIX確定しました（${nurse.name}）` : '候補をFIX確定しました（未割当）');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '候補の確定に失敗しました。', 'error');
     }
+  };
 
-    const { nurse, score } = autoAssignNurse(visit, nurses, scheduledVisits);
-    const scheduled: ScheduledVisit = {
-      ...visit,
-      confirmedAt: new Date().toISOString(),
-      nurseId: nurse?.id,
-      nurseName: nurse?.name,
-      assignmentScore: score,
-      manuallyEdited: true
-    };
-
-    await scheduleRepo.upsert(scheduled);
-    refreshUi();
-    showToast(nurse ? `候補を確定しました（${nurse.name}）` : '候補を確定しました（未割当）');
+  const handleDropCandidateToFixed = async (targetDateKey: string, droppedSlotId?: string) => {
+    const slotId = droppedSlotId || draggedSlotId;
+    if (!slotId) return;
+    try {
+      const { nurse } = await confirmCandidateAsFixed(slotId, targetDateKey);
+      showToast(nurse ? `候補をFIXへ移動しました（${nurse.name}）` : '候補をFIXへ移動しました（未割当）');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'FIXへの移動に失敗しました。', 'error');
+    }
   };
 
   const handleUpdateCandidateTime = (slotId: string, start: string, end: string) => {
@@ -711,14 +791,16 @@ export default function App() {
       showToast('時間帯を正しく入力してください。', 'error');
       return;
     }
-    await scheduleRepo.upsert({
+    const nextVisit = {
       ...visit,
       start,
       end,
       startMinutes,
       endMinutes,
       manuallyEdited: true
-    });
+    };
+    await scheduleRepo.upsert(nextVisit);
+    setScheduledMap((prev) => ({ ...prev, [nextVisit.slotId]: nextVisit }));
     refreshUi();
     showToast('確定スケジュールの時間帯を10分単位で更新しました');
   };
@@ -830,12 +912,21 @@ export default function App() {
 
   const handleRemoveScheduled = async (slotId: string) => {
     await scheduleRepo.remove(slotId);
+    setScheduledMap((prev) => {
+      const next = { ...prev };
+      delete next[slotId];
+      return next;
+    });
+    setHiddenCandidateIds((prev) => prev.filter((id) => id !== slotId));
+    setRouteSuggestion(null);
     refreshUi();
-    showToast('確定スケジュールを削除しました');
+    showToast('確定スケジュールを差し戻しました');
   };
 
   const handleUpdateScheduled = async (visit: ScheduledVisit) => {
-    await scheduleRepo.upsert({ ...visit, manuallyEdited: true });
+    const nextVisit = { ...visit, manuallyEdited: true };
+    await scheduleRepo.upsert(nextVisit);
+    setScheduledMap((prev) => ({ ...prev, [nextVisit.slotId]: nextVisit }));
     refreshUi();
     showToast('スケジュールを更新しました');
   };
@@ -931,6 +1022,7 @@ export default function App() {
     });
 
     await userRepo.upsert(normalized);
+    await userArchiveRepo.upsert(buildArchiveRecord(normalized, false));
     if (scheduleIdsToRemove.length) {
       await Promise.all(scheduleIdsToRemove.map((slotId) => scheduleRepo.remove(slotId)));
     }
@@ -962,6 +1054,35 @@ export default function App() {
       shiftStart: shift?.start ?? '09:00',
       shiftEnd: shift?.end ?? '18:00'
     });
+  };
+
+  const handleRestoreArchivedUser = async (userId: string) => {
+    const archived = archivedUsers.find((item) => item.id === userId && item.businessId === activeBusinessId && item.deleted);
+    if (!archived) {
+      showToast('バックアップ利用者が見つかりませんでした。', 'error');
+      return;
+    }
+
+    const confirmed = window.confirm(`「${archived.利用者名}」をバックアップから復元しますか？`);
+    if (!confirmed) return;
+
+    const normalized = normalizeUserRecord({
+      ...archived,
+      id: archived.sourceUserId
+    });
+    const exists = users.some((item) => item.id === normalized.id);
+    const nextUsers = exists
+      ? users.map((item) => item.id === normalized.id ? normalized : item)
+      : [...users, normalized].sort((a, b) => a.利用者名.localeCompare(b.利用者名, 'ja'));
+
+    await userRepo.upsert(normalized);
+    await userArchiveRepo.upsert(buildArchiveRecord(normalized, false));
+    setUsers(nextUsers);
+    setCsvText(serializeUsersToCsv(nextUsers));
+    setHiddenCandidateIds((prev) => prev.filter((slotId) => !slotId.includes(`-${normalized.id}-`)));
+    setCandidateOverrides((prev) => Object.fromEntries(Object.entries(prev).filter(([slotId]) => !slotId.includes(`-${normalized.id}-`))));
+    refreshUi();
+    showToast('バックアップから利用者を復元しました');
   };
 
   const handleSaveNurseEditor = async () => {
@@ -1182,7 +1303,9 @@ export default function App() {
 
   const handleClearUsersCsv = async () => {
     clearCandidateCustomizations();
+    await syncUserArchiveForBusiness([], users);
     await Promise.all([userRepo.clear(), scheduleRepo.clear()]);
+    setScheduledMap({});
     setCsvText('');
     setUsers([]);
     setRouteSuggestion(null);
@@ -1263,6 +1386,9 @@ export default function App() {
     const unsubUsers = userRepo.subscribe((items) => {
       setUsers(items);
     });
+    const unsubUserArchive = userArchiveRepo.subscribe((items) => {
+      setArchivedUsers(items.sort((a, b) => a.businessName.localeCompare(b.businessName, 'ja') || a.利用者名.localeCompare(b.利用者名, 'ja')));
+    });
     const unsubNurses = nurseRepo.subscribe((items) => {
       setNurses(items);
     });
@@ -1273,6 +1399,7 @@ export default function App() {
     });
     return () => {
       unsubUsers();
+      unsubUserArchive();
       unsubNurses();
       unsubSchedules();
     };
@@ -1289,6 +1416,15 @@ export default function App() {
       setUsers(parsed);
       parsed.forEach((item) => {
         userRepo.upsert(item);
+        userArchiveRepo.upsert({
+          ...normalizeUserRecord(item),
+          id: `${safeInitialBusinessId}::${item.id}`,
+          sourceUserId: item.id,
+          businessId: safeInitialBusinessId,
+          businessName: initialBusinesses.find((business) => business.id === safeInitialBusinessId)?.name ?? '事業所',
+          deleted: false,
+          archivedAt: new Date().toISOString()
+        });
       });
     }
     if (!nurses.length) {
@@ -1358,14 +1494,45 @@ export default function App() {
     return acc;
   }, {}), [scheduledVisits]);
 
+  const deletedArchivedUsers = useMemo(() => archivedUsers
+    .filter((item) => item.businessId === activeBusinessId && item.deleted && !users.some((user) => user.id === item.sourceUserId))
+    .sort((a, b) => (b.deletedAt ?? '').localeCompare(a.deletedAt ?? '') || a.利用者名.localeCompare(b.利用者名, 'ja')),
+  [archivedUsers, activeBusinessId, users]);
+
+  const duplicateUserNameRows = useMemo(() => Object.entries(users.reduce<Record<string, UserRecord[]>>((acc, user) => {
+    const key = user.利用者名.trim();
+    if (!key) return acc;
+    acc[key] ??= [];
+    acc[key].push(user);
+    return acc;
+  }, {}))
+    .filter(([, list]) => list.length > 1)
+    .map(([name, list]) => ({
+      name,
+      count: list.length,
+      users: list.sort((a, b) => a.居住地.localeCompare(b.居住地, 'ja'))
+    }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'ja')),
+  [users]);
+
+  const duplicateUserIds = useMemo(() => new Set(duplicateUserNameRows.flatMap((row) => row.users.map((user) => user.id))), [duplicateUserNameRows]);
+
+  const duplicateUserTooltipMap = useMemo(() => duplicateUserNameRows.reduce<Record<string, string[]>>((acc, row) => {
+    row.users.forEach((user) => {
+      acc[user.id] = row.users
+        .filter((candidate) => candidate.id !== user.id)
+        .map((candidate) => `${candidate.利用者名}（${candidate.居住地 || '住所未設定'}）`);
+    });
+    return acc;
+  }, {}), [duplicateUserNameRows]);
+
   const unassignedAlertRows = useMemo(() => Object.entries(candidatesByDate)
     .filter(([, visits]) => visits.length > 0)
     .sort(([left], [right]) => left.localeCompare(right))
-    .slice(0, 6)
     .map(([dateKey, visits]) => ({
       dateKey,
       count: visits.length,
-      users: visits.slice(0, 3).map((visit) => visit.userName)
+      visits: [...visits].sort((a, b) => a.startMinutes - b.startMinutes || a.userName.localeCompare(b.userName, 'ja'))
     })), [candidatesByDate]);
 
   if (!authUser) {
@@ -1553,12 +1720,45 @@ export default function App() {
         </div>
       </section>
 
+      {duplicateUserNameRows.length > 0 && (
+        <section className="card panel duplicate-user-alert-panel">
+          <div className="split-line unassigned-alert-header">
+            <div>
+              <h2>利用者名重複アラート</h2>
+              <p className="helper-text">現在の事業所内で同じ利用者名が重複しています。下の利用者をクリックすると、該当の編集画面へ直接移動できます。</p>
+            </div>
+            <div className="alert-count-badge duplicate-count-badge">{duplicateUserNameRows.length}件</div>
+          </div>
+          <div className="duplicate-user-list">
+            {duplicateUserNameRows.map((row) => (
+              <article key={row.name} className="mini-card duplicate-user-card">
+                <strong>{row.name}</strong>
+                <div>{row.count}件の重複</div>
+                <div className="duplicate-user-chip-list">
+                  {row.users.map((user) => (
+                    <button
+                      key={user.id}
+                      type="button"
+                      className="duplicate-user-chip"
+                      onClick={() => handleOpenUserEditor(user.id)}
+                    >
+                      <strong>{user.利用者名}</strong>
+                      <span>{user.居住地}</span>
+                    </button>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
       {unscheduledCandidates.length > 0 && (
         <section className="card panel unassigned-alert-panel">
           <div className="split-line unassigned-alert-header">
             <div>
               <h2>未割当候補アラート</h2>
-              <p className="helper-text">未確定候補が残っています。看護師シフトに合わせてドラッグし、○でFIX化してください。</p>
+              <p className="helper-text">日付ごとに未割当候補を表示しています。利用者BOXをドラッグしてカレンダーへ配置・FIX化すると、その日付のアラート件数が自動で減ります。</p>
             </div>
             <div className="alert-count-badge">{unscheduledCandidates.length}件</div>
           </div>
@@ -1567,7 +1767,24 @@ export default function App() {
               <article key={row.dateKey} className="mini-card unassigned-alert-card">
                 <strong>{row.dateKey}</strong>
                 <div>{row.count}件未割当</div>
-                <div className="card-subtext">{row.users.join(' / ')}{row.count > row.users.length ? ' …' : ''}</div>
+                <div className="alert-visit-chip-list">
+                  {row.visits.map((visit) => (
+                    <button
+                      key={visit.slotId}
+                      type="button"
+                      className="alert-visit-chip"
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.effectAllowed = 'move';
+                        e.dataTransfer.setData('text/plain', `candidate:${visit.slotId}`);
+                        setDraggedSlotId(visit.slotId);
+                      }}
+                    >
+                      <span>{visit.start}</span>
+                      <strong>{visit.userName}</strong>
+                    </button>
+                  ))}
+                </div>
               </article>
             ))}
           </div>
@@ -1586,6 +1803,7 @@ export default function App() {
           onDragStartWorkerShift={setDraggedWorkerShiftId}
           onDropCandidate={handleMoveCandidate}
           onDropWorkerShift={(dateKey, shiftId) => { handleMoveWorkerShift(dateKey, shiftId).catch((error) => showToast(error instanceof Error ? error.message : '看護師シフト移動に失敗しました。', 'error')); }}
+          onDropCandidateToFixed={(dateKey, slotId) => { handleDropCandidateToFixed(dateKey, slotId).catch((error) => showToast(error instanceof Error ? error.message : 'FIX反映に失敗しました。', 'error')); }}
           onConfirmCandidate={handleConfirmCandidate}
           onRemoveCandidate={handleRemoveCandidate}
           onRemoveScheduled={handleRemoveScheduled}
@@ -1597,6 +1815,8 @@ export default function App() {
           onCreateUserFromDate={handleCreateUserFromDate}
           onOpenUserEditor={handleOpenUserEditor}
           onOpenNurseEditor={handleOpenNurseEditor}
+          duplicateUserIds={[...duplicateUserIds]}
+          duplicateUserTooltips={duplicateUserTooltipMap}
           viewMode={viewMode}
           periodLabel={formatMonthLabel(currentDate)}
           selectedNurseName={selectedNurseLabel}
@@ -1605,7 +1825,7 @@ export default function App() {
 
 
       {unscheduledCandidates.length > 0 && (
-        <CandidateList visits={unscheduledCandidates} areaColors={areaColors} onDragStart={setDraggedSlotId} />
+        <CandidateList visits={unscheduledCandidates} areaColors={areaColors} onDragStart={setDraggedSlotId} duplicateUserIds={[...duplicateUserIds]} duplicateUserTooltips={duplicateUserTooltipMap} />
       )}
 
       <section className="scheduler-footer-grid">
@@ -1640,10 +1860,22 @@ export default function App() {
           <div className="compact-list scrollable-list footer-list">
             {users.length === 0 && <p className="empty">利用者はまだ読み込まれていません。</p>}
             {users.map((user) => (
-              <article key={user.id} className="mini-card footer-user-card clickable-card" onClick={() => handleOpenUserEditor(user.id)}>
+              <article key={user.id} className={`mini-card footer-user-card clickable-card ${duplicateUserIds.has(user.id) ? 'duplicate-user-box' : ''}`} onClick={() => handleOpenUserEditor(user.id)}>
                 <div className="split-line">
                   <strong>{user.利用者名}</strong>
-                  <span className="badge footer-badge subtle">FIX {scheduledCountByUserId[user.id] ?? 0}</span>
+                  <div className="footer-user-badges">
+                    {duplicateUserTooltipMap[user.id]?.length ? (
+                      <span className="duplicate-warning-badge" role="note" tabIndex={0}>
+                        ⚠ 重複
+                        <span className="duplicate-warning-tooltip">
+                          {duplicateUserTooltipMap[user.id].map((label) => (
+                            <span key={`${user.id}-${label}`} className="duplicate-warning-tooltip-line">{label}</span>
+                          ))}
+                        </span>
+                      </span>
+                    ) : null}
+                    <span className="badge footer-badge subtle">FIX {scheduledCountByUserId[user.id] ?? 0}</span>
+                  </div>
                 </div>
                 <div>{user.居住地}</div>
                 <div className="card-subtext">{user.保険区分} / 希望: {user.希望曜日 || '未設定'} / 処置: {user.希望処置内容}</div>
@@ -1652,9 +1884,32 @@ export default function App() {
           </div>
         </section>
 
+        <section className="card panel footer-users-panel archive-users-panel">
+          <div className="split-line">
+            <div>
+              <h2>利用者バックアップ</h2>
+              <p className="helper-text">現在の事業所で削除済みになった利用者だけを表示しています。復元前には確認ダイアログが表示されます。</p>
+            </div>
+            <span className="badge footer-badge">{deletedArchivedUsers.length}件</span>
+          </div>
+          <div className="compact-list scrollable-list footer-list">
+            {deletedArchivedUsers.length === 0 && <p className="empty">削除済みのバックアップ利用者はありません。</p>}
+            {deletedArchivedUsers.map((user) => (
+              <article key={`archive-${user.id}`} className="mini-card footer-user-card">
+                <div className="split-line">
+                  <strong>{user.利用者名}</strong>
+                  <button type="button" className="small-action primary-soft" onClick={() => { handleRestoreArchivedUser(user.id).catch((error) => showToast(error instanceof Error ? error.message : 'バックアップ復元に失敗しました。', 'error')); }}>復元</button>
+                </div>
+                <div>{user.居住地}</div>
+                <div className="card-subtext">{user.保険区分} / 希望: {user.希望曜日 || '未設定'} / 担当: {user.担当看護師名 || '未設定'}</div>
+              </article>
+            ))}
+          </div>
+        </section>
+
         <NurseMasterPanel nurses={nurses} onToggleActive={handleToggleNurse} onAdd={handleAddNurse} onImportCsv={handleNurseCsvFile} onClearCsv={handleClearNurseCsv} />
 
-        <ConfirmedSchedulePanel key={`confirmed-list-${interactionVersion}`} visits={visibleScheduledVisits} nurses={nurses} onUpdate={handleUpdateScheduled} onRemove={handleRemoveScheduled} />
+        <ConfirmedSchedulePanel key={`confirmed-list-${interactionVersion}`} visits={visibleScheduledVisits} nurses={nurses} duplicateUserIds={[...duplicateUserIds]} duplicateUserTooltips={duplicateUserTooltipMap} onUpdate={handleUpdateScheduled} onRemove={handleRemoveScheduled} />
       </section>
     </div>
   );

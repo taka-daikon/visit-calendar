@@ -24,6 +24,7 @@ interface Props {
   onDragStartWorkerShift: (shiftId: string) => void;
   onDropCandidate: (dateKey: string, slotId?: string) => void;
   onDropWorkerShift: (dateKey: string, shiftId?: string) => void;
+  onDropCandidateToFixed: (dateKey: string, slotId?: string) => void;
   onConfirmCandidate: (slotId: string) => void;
   onRemoveCandidate: (slotId: string) => void;
   onRemoveScheduled: (slotId: string) => void;
@@ -35,6 +36,8 @@ interface Props {
   onCreateUserFromDate: (dateKey: string) => void;
   onOpenUserEditor: (userId: string) => void;
   onOpenNurseEditor: (nurseId: string, dateKey: string, shiftId: string) => void;
+  duplicateUserIds: string[];
+  duplicateUserTooltips: Record<string, string[]>;
   viewMode: ViewMode;
   periodLabel: string;
   selectedNurseName: string;
@@ -76,6 +79,7 @@ export function CalendarView({
   onDragStartWorkerShift,
   onDropCandidate,
   onDropWorkerShift,
+  onDropCandidateToFixed,
   onConfirmCandidate,
   onRemoveCandidate,
   onRemoveScheduled,
@@ -87,6 +91,8 @@ export function CalendarView({
   onCreateUserFromDate,
   onOpenUserEditor,
   onOpenNurseEditor,
+  duplicateUserIds,
+  duplicateUserTooltips,
   viewMode,
   periodLabel,
   selectedNurseName
@@ -96,6 +102,7 @@ export function CalendarView({
   const [editingScheduledId, setEditingScheduledId] = useState('');
   const [editingWorkerId, setEditingWorkerId] = useState('');
   const [editStart, setEditStart] = useState('');
+  const duplicateIdSet = useMemo(() => new Set(duplicateUserIds), [duplicateUserIds]);
   const [editEnd, setEditEnd] = useState('');
 
   const candidateGroupsByDate = useMemo(() => Object.fromEntries(
@@ -154,6 +161,21 @@ export function CalendarView({
     if (!editingWorkerId) return;
     onUpdateWorkerShiftTime(editingWorkerId, editStart, editEnd);
     cancelEdit();
+  };
+
+  const renderDuplicateBadge = (userId: string) => {
+    const labels = duplicateUserTooltips[userId] ?? [];
+    if (!labels.length) return null;
+    return (
+      <span className="duplicate-warning-badge" role="note" tabIndex={0}>
+        ⚠ 重複
+        <span className="duplicate-warning-tooltip">
+          {labels.map((label) => (
+            <span key={`${userId}-${label}`} className="duplicate-warning-tooltip-line">{label}</span>
+          ))}
+        </span>
+      </span>
+    );
   };
 
   return (
@@ -284,7 +306,7 @@ export function CalendarView({
                         return (
                           <div
                             key={visit.slotId}
-                            className={`calendar-item candidate removable magnet-card ${isEditing ? 'editing-card' : ''}`}
+                            className={`calendar-item candidate removable magnet-card ${isEditing ? 'editing-card' : ''} ${duplicateIdSet.has(visit.userId) ? 'duplicate-user-box' : ''}`}
                             draggable={!isEditing}
                             onClick={(event) => {
                               event.stopPropagation();
@@ -301,6 +323,7 @@ export function CalendarView({
                           >
                             <div className="calendar-item-body">
                               <div className="calendar-item-title">[{visit.start}-{visit.end}] {visit.userName}</div>
+                              {renderDuplicateBadge(visit.userId)}
                               <div className="calendar-item-sub">{visit.address || visit.area}</div>
                               <div className="calendar-item-meta">担当希望: {visit.preferredNurseName || '未指定'} / エリア: {visit.area}</div>
                               {isEditing && (
@@ -338,8 +361,22 @@ export function CalendarView({
                 ))}
               </div>
 
-              <div className="calendar-section confirmed-zone">
-                <div className="section-title">FIX済み</div>
+              <div
+                className="calendar-section confirmed-zone"
+                onClick={(event) => event.stopPropagation()}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  const payload = event.dataTransfer.getData('text/plain');
+                  if (!payload.startsWith('candidate:')) return;
+                  onDropCandidateToFixed(day.dateKey, payload.replace(/^candidate:/, ''));
+                }}
+              >
+                <div className="section-title">FIX済み（ここへドロップで確定）</div>
                 {dayScheduledGroups.length === 0 && <div className="empty small">確定なし</div>}
                 {dayScheduledGroups.map((group) => (
                   <div key={`${day.dateKey}-confirmed-${group.address}`} className="address-group-card confirmed-address-group" onClick={(event) => event.stopPropagation()}>
@@ -354,7 +391,7 @@ export function CalendarView({
                         return (
                           <div
                             key={visit.slotId}
-                            className={`calendar-item confirmed confirmed-fixed magnet-card ${isEditing ? 'editing-card' : ''}`}
+                            className={`calendar-item confirmed confirmed-fixed magnet-card ${isEditing ? 'editing-card' : ''} ${duplicateIdSet.has(visit.userId) ? 'duplicate-user-box' : ''}`}
                             style={{ ...accentStyle(accent), borderLeftColor: accent }}
                             onClick={(event) => {
                               event.stopPropagation();
@@ -363,6 +400,7 @@ export function CalendarView({
                           >
                             <div className="calendar-item-body">
                               <div className="calendar-item-title">【FIX】[{visit.start}-{visit.end}] {visit.userName}</div>
+                              {renderDuplicateBadge(visit.userId)}
                               <div className="calendar-item-sub">{visit.address || visit.area}</div>
                               <div className="calendar-item-meta">担当: {visit.nurseName || visit.preferredNurseName || '未割当'} / エリア: {visit.area}</div>
                               {isEditing && (

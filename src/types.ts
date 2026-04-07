@@ -36,6 +36,15 @@ export interface UserRecord extends RawCsvRow {
   preferredNurseName?: string;
 }
 
+export interface UserArchiveRecord extends UserRecord {
+  sourceUserId: string;
+  businessId: string;
+  businessName: string;
+  deleted: boolean;
+  deletedAt?: string;
+  archivedAt: string;
+}
+
 export interface TimeSlot {
   start: string;
   end: string;
