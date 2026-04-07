@@ -87,7 +87,8 @@ export function autoAssignNurse(
       ? Math.min(...sameDayVisits.map((item) => haversineKm(item.area, visit.area)))
       : haversineKm(nurse.areas[0] ?? visit.area, visit.area);
     const distanceScore = Math.max(0, 30 - nearestDistance * 3);
-    const score = 100 + areaMatch + skillScore + employmentScore + sameAreaCount * 10 + distanceScore - loadPenalty;
+    const preferredNurseBonus = visit.preferredNurseId === nurse.id || (visit.preferredNurseName && visit.preferredNurseName === nurse.name) ? 120 : 0;
+    const score = 100 + preferredNurseBonus + areaMatch + skillScore + employmentScore + sameAreaCount * 10 + distanceScore - loadPenalty;
     return { nurse, score };
   }).sort((a, b) => b.score - a.score || a.nurse.name.localeCompare(b.nurse.name, 'ja'));
 

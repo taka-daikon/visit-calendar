@@ -24,11 +24,16 @@ export interface RawCsvRow {
   日曜希望時間?: string;
   前回更新日?: string;
   書類期限日?: string;
+  カラー?: string;
+  担当看護師名?: string;
 }
 
 export interface UserRecord extends RawCsvRow {
   id: string;
   hopeDays: WeekdayJa[];
+  boxColor?: string;
+  preferredNurseId?: string;
+  preferredNurseName?: string;
 }
 
 export interface TimeSlot {
@@ -51,6 +56,9 @@ export interface CandidateVisit extends TimeSlot {
   treatment: string;
   requiredSkills: string[];
   weekday: WeekdayJa;
+  boxColor?: string;
+  preferredNurseId?: string;
+  preferredNurseName?: string;
 }
 
 export interface ScheduledVisit extends CandidateVisit {

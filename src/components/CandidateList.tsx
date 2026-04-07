@@ -22,14 +22,15 @@ export function CandidateList({ visits, areaColors, onDragStart }: Props) {
               e.dataTransfer.setData('text/plain', `candidate:${visit.slotId}`);
               onDragStart(visit.slotId);
             }}
-            style={{ borderLeftColor: areaColors[visit.area] ?? '#cbd5e1' }}
+            style={{ borderLeftColor: visit.boxColor || areaColors[visit.area] || '#cbd5e1' }}
           >
             <div className="split-line">
               <div>
                 <strong>{visit.userName}</strong>
                 <div className="card-subtext">{visit.address || visit.area}</div>
+                {visit.preferredNurseName && <div className="card-subtext">担当看護師: {visit.preferredNurseName}</div>}
               </div>
-              <span className="badge" style={{ background: areaColors[visit.area] ?? '#eef2ff' }}>{visit.area}</span>
+              <span className="badge" style={{ background: visit.boxColor || areaColors[visit.area] || '#eef2ff' }}>{visit.area}</span>
             </div>
             <div>{visit.dateKey} / 時間: {visit.start} - {visit.end}</div>
             <div>{visit.insuranceType} / {visit.treatment}</div>

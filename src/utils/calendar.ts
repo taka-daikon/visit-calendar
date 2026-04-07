@@ -85,6 +85,9 @@ export function buildCandidateVisits(users: UserRecord[], days: CalendarDay[]): 
         treatment: user.希望処置内容,
         requiredSkills: inferSkills(user.希望処置内容),
         weekday,
+        boxColor: user.boxColor || user.カラー || '',
+        preferredNurseId: user.preferredNurseId,
+        preferredNurseName: user.preferredNurseName || user.担当看護師名 || '',
         ...slot
       }));
     });

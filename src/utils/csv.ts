@@ -14,7 +14,11 @@ const HEADER_ALIASES: Record<string, string> = {
   '希望曜日（複数可）': '希望曜日',
   曜日: '希望曜日',
   '希望性別（希望なし可）': '希望性別',
-  処置内容: '希望処置内容'
+  処置内容: '希望処置内容',
+  色: 'カラー',
+  boxcolor: 'カラー',
+  担当看護師: '担当看護師名',
+  希望担当看護師: '担当看護師名'
 };
 
 function normalizeHeader(value: string): string {
@@ -104,6 +108,10 @@ export function parseCsv(text: string): UserRecord[] {
       日曜希望時間: record['日曜希望時間'] || '',
       前回更新日: record['前回更新日'] || '',
       書類期限日: record['書類期限日'] || '',
+      カラー: record['カラー'] || '',
+      担当看護師名: record['担当看護師名'] || '',
+      boxColor: record['カラー'] || '',
+      preferredNurseName: record['担当看護師名'] || '',
       hopeDays
     };
   });

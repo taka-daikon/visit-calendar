@@ -2,6 +2,7 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertsPanel } from './components/AlertsPanel';
 import { BusinessTabsPanel } from './components/BusinessTabsPanel';
 import { CalendarView } from './components/CalendarView';
+import { CandidateList } from './components/CandidateList';
 import { CloudSyncPanel } from './components/CloudSyncPanel';
 import { ConfirmedSchedulePanel } from './components/ConfirmedSchedulePanel';
 import { ConflictWarningsPanel } from './components/ConflictWarningsPanel';
@@ -9,10 +10,12 @@ import { DocumentsDashboard } from './components/DocumentsDashboard';
 import { DraftManagerPanel } from './components/DraftManagerPanel';
 import { FiltersPanel } from './components/FiltersPanel';
 import { NurseMasterPanel } from './components/NurseMasterPanel';
+import { NurseEditorModal } from './components/NurseEditorModal';
 import { NurseShiftTabsPanel } from './components/NurseShiftTabsPanel';
 import { ReportsPanel } from './components/ReportsPanel';
 import { RouteSuggestionPanel } from './components/RouteSuggestionPanel';
 import { Toolbar } from './components/Toolbar';
+import { UserFormModal } from './components/UserFormModal';
 import { sampleCsv } from './data/sampleCsv';
 import { sampleNurses } from './data/sampleNurses';
 import { currentSyncProvider, isDemoMode } from './services/appEnv';
@@ -20,7 +23,7 @@ import { signIn, signOutUser, subscribeAuth } from './services/firebaseAuth';
 import { downloadTextFile, loadFromStorage, printHtml, saveToStorage } from './services/persistence';
 import { createNurseRepo, createScheduleRepo, createUserRepo } from './services/repository';
 import { AuthUser, CandidateVisit, Filters, Nurse, NurseShiftEntry, RouteSuggestion, ScheduledVisit, SyncState, UserRecord, ViewMode, WeekdayJa } from './types';
-import { applyFilters, buildCandidateVisits, extractAreaName, getAreaColors, getUnscheduledCandidates, groupByDate, minutesToTime, timeToMinutes } from './utils/calendar';
+import { applyFilters, buildCandidateVisits, expandTimeRange, extractAreaName, getAreaColors, getUnscheduledCandidates, groupByDate, minutesToTime, timeToMinutes } from './utils/calendar';
 import { parseCsv } from './utils/csv';
 import { START_MONTH, START_YEAR, WEEKDAY_LABELS, addMonths, formatDateKey, formatMonthLabel, getVisibleDays } from './utils/date';
 import { readCsvFileText } from './utils/fileText';
@@ -28,6 +31,7 @@ import { suggestOptimizedRoute } from './utils/mapsRouteService';
 import { parseNurseCsv } from './utils/nurseCsv';
 import { buildDocumentDeadlines, buildMonthlyReport, buildReviewAlerts, monthlyReportToCsv } from './utils/report';
 import { autoAssignNurse, buildConflictWarnings } from './utils/scheduler';
+import { inferSkills } from './utils/skills';
 import './styles.css';
 
 const today = new Date('2026-03-28T09:00:00');
@@ -45,6 +49,112 @@ const BUSINESS_STORAGE_KEY = 'visit-calendar-businesses';
 const ACTIVE_BUSINESS_KEY = 'visit-calendar-active-business';
 const BUSINESS_SNAPSHOT_KEY = 'visit-calendar-business-snapshots';
 const SAVED_DRAFTS_KEY = 'visit-calendar-saved-drafts';
+
+const USER_CSV_HEADERS: Array<keyof UserRecord | 'カラー' | '担当看護師名'> = [
+  '利用者名',
+  '居住地',
+  '保険区分',
+  '更新サイクル',
+  '希望曜日',
+  '希望性別',
+  '希望処置内容',
+  '月曜希望時間',
+  '火曜希望時間',
+  '水曜希望時間',
+  '木曜希望時間',
+  '金曜希望時間',
+  '土曜希望時間',
+  '日曜希望時間',
+  '前回更新日',
+  '書類期限日',
+  'カラー',
+  '担当看護師名'
+];
+
+const USER_COLOR_OPTIONS = ['#60a5fa', '#f59e0b', '#34d399', '#f472b6', '#a78bfa', '#fb7185', '#22c55e', '#06b6d4', '#f97316', '#14b8a6', '#fde047', '#94a3b8'];
+const USER_WEEKDAYS: WeekdayJa[] = ['月曜', '火曜', '水曜', '木曜', '金曜', '土曜', '日曜'];
+const USER_TIME_FIELD_MAP: Record<WeekdayJa, keyof UserRecord> = {
+  日曜: '日曜希望時間',
+  月曜: '月曜希望時間',
+  火曜: '火曜希望時間',
+  水曜: '水曜希望時間',
+  木曜: '木曜希望時間',
+  金曜: '金曜希望時間',
+  土曜: '土曜希望時間'
+};
+
+type NurseEditorDraft = Nurse & {
+  editDateKey: string;
+  shiftId: string;
+  shiftStart: string;
+  shiftEnd: string;
+};
+
+function splitHopeDays(value: string): WeekdayJa[] {
+  return value
+    .split(/[|｜、/／,，]/)
+    .map((item) => item.trim())
+    .filter((item): item is WeekdayJa => USER_WEEKDAYS.includes(item as WeekdayJa));
+}
+
+function escapeCsvCell(value: unknown): string {
+  const text = String(value ?? '');
+  if (/[",\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+function normalizeUserRecord(record: UserRecord): UserRecord {
+  const hopeDays = splitHopeDays(record.希望曜日 || '').filter((item, index, list) => list.indexOf(item) === index);
+  const color = record.boxColor || record.カラー || USER_COLOR_OPTIONS[0];
+  const preferredNurseName = record.preferredNurseName || record.担当看護師名 || '';
+  return {
+    ...record,
+    希望曜日: hopeDays.join('|'),
+    hopeDays,
+    カラー: color,
+    boxColor: color,
+    preferredNurseName,
+    担当看護師名: preferredNurseName
+  };
+}
+
+function serializeUsersToCsv(records: UserRecord[]): string {
+  const lines = records.map((record) => USER_CSV_HEADERS.map((header) => escapeCsvCell(record[header] ?? '')).join(','));
+  return [USER_CSV_HEADERS.join(','), ...lines].join('\n');
+}
+
+function buildUserDraftForDate(dateKey: string): UserRecord {
+  const weekday = weekdayFromDateKey(dateKey);
+  const timeField = USER_TIME_FIELD_MAP[weekday];
+  return normalizeUserRecord({
+    id: crypto.randomUUID(),
+    利用者名: '',
+    居住地: '',
+    保険区分: '医療保険',
+    更新サイクル: '1ヶ月',
+    希望曜日: weekday,
+    希望性別: '希望なし',
+    希望処置内容: '基本看護',
+    月曜希望時間: '',
+    火曜希望時間: '',
+    水曜希望時間: '',
+    木曜希望時間: '',
+    金曜希望時間: '',
+    土曜希望時間: '',
+    日曜希望時間: '',
+    前回更新日: '',
+    書類期限日: '',
+    カラー: USER_COLOR_OPTIONS[0],
+    担当看護師名: '',
+    boxColor: USER_COLOR_OPTIONS[0],
+    preferredNurseId: '',
+    preferredNurseName: '',
+    hopeDays: [weekday],
+    [timeField]: '09:00-10:00'
+  } as UserRecord);
+}
 
 const userRepo = createUserRepo();
 const nurseRepo = createNurseRepo();
@@ -318,6 +428,9 @@ export default function App() {
   const [lastReloadAt, setLastReloadAt] = useState('初期表示');
   const [menuOpen, setMenuOpen] = useState(false);
   const [routeModalOpen, setRouteModalOpen] = useState(false);
+  const [userFormMode, setUserFormMode] = useState<'create' | 'edit' | null>(null);
+  const [userDraft, setUserDraft] = useState<UserRecord | null>(null);
+  const [nurseEditorDraft, setNurseEditorDraft] = useState<NurseEditorDraft | null>(null);
   const previousBusinessIdRef = useRef(safeInitialBusinessId);
   const hydratingBusinessRef = useRef(false);
 
@@ -740,6 +853,194 @@ export default function App() {
     await nurseRepo.upsert({ ...nurse, id: crypto.randomUUID() });
     refreshUi();
     showToast('ワーカーを追加しました');
+  };
+
+
+  const closeUserForm = () => {
+    setUserFormMode(null);
+    setUserDraft(null);
+  };
+
+  const handleCreateUserFromDate = (dateKey: string) => {
+    setUserFormMode('create');
+    setUserDraft(buildUserDraftForDate(dateKey));
+  };
+
+  const handleOpenUserEditor = (userId: string) => {
+    const target = users.find((item) => item.id === userId);
+    if (!target) {
+      showToast('利用者情報が見つかりませんでした。', 'error');
+      return;
+    }
+    const matchedNurse = nurses.find((nurse) => nurse.id === target.preferredNurseId || nurse.name === target.preferredNurseName || nurse.name === target.担当看護師名);
+    setUserFormMode('edit');
+    setUserDraft(normalizeUserRecord({
+      ...target,
+      preferredNurseId: matchedNurse?.id ?? target.preferredNurseId,
+      preferredNurseName: matchedNurse?.name ?? target.preferredNurseName ?? target.担当看護師名 ?? '',
+      担当看護師名: matchedNurse?.name ?? target.担当看護師名 ?? target.preferredNurseName ?? ''
+    }));
+  };
+
+  const handleSaveUser = async () => {
+    if (!userDraft) return;
+    const normalized = normalizeUserRecord(userDraft);
+    if (!normalized.利用者名.trim()) {
+      showToast('利用者名を入力してください。', 'error');
+      return;
+    }
+    if (!normalized.居住地.trim()) {
+      showToast('居住地を入力してください。', 'error');
+      return;
+    }
+
+    const exists = users.some((item) => item.id === normalized.id);
+    const nextUsers = exists
+      ? users.map((item) => item.id === normalized.id ? normalized : item)
+      : [...users, normalized].sort((a, b) => a.利用者名.localeCompare(b.利用者名, 'ja'));
+
+    const nextArea = extractAreaName(normalized.居住地);
+    const userVisits = scheduledVisits.filter((visit) => visit.userId === normalized.id);
+    const scheduleIdsToRemove: string[] = [];
+    const updatedSchedules = userVisits.map((visit) => {
+      const weekday = weekdayFromDateKey(visit.dateKey);
+      const nextRange = expandTimeRange(String(normalized[USER_TIME_FIELD_MAP[weekday]] || '').trim())[0];
+      const slotId = nextRange ? `${visit.dateKey}-${normalized.id}-${nextRange.start}-${nextRange.end}` : visit.slotId;
+      if (slotId !== visit.slotId) scheduleIdsToRemove.push(visit.slotId);
+      return {
+        ...visit,
+        slotId,
+        userName: normalized.利用者名,
+        address: normalized.居住地,
+        area: nextArea,
+        insuranceType: normalized.保険区分,
+        updateCycle: normalized.更新サイクル,
+        genderPreference: normalized.希望性別,
+        treatment: normalized.希望処置内容,
+        requiredSkills: inferSkills(normalized.希望処置内容),
+        boxColor: normalized.boxColor,
+        preferredNurseId: normalized.preferredNurseId,
+        preferredNurseName: normalized.preferredNurseName,
+        start: nextRange?.start ?? visit.start,
+        end: nextRange?.end ?? visit.end,
+        startMinutes: nextRange?.startMinutes ?? visit.startMinutes,
+        endMinutes: nextRange?.endMinutes ?? visit.endMinutes,
+        weekday,
+        manuallyEdited: true
+      } satisfies ScheduledVisit;
+    });
+
+    await userRepo.upsert(normalized);
+    if (scheduleIdsToRemove.length) {
+      await Promise.all(scheduleIdsToRemove.map((slotId) => scheduleRepo.remove(slotId)));
+    }
+    if (updatedSchedules.length) {
+      await Promise.all(updatedSchedules.map((visit) => scheduleRepo.upsert(visit)));
+    }
+
+    setUsers(nextUsers);
+    setCsvText(serializeUsersToCsv(nextUsers));
+    setHiddenCandidateIds((prev) => prev.filter((slotId) => !slotId.includes(`-${normalized.id}-`)));
+    setCandidateOverrides((prev) => Object.fromEntries(Object.entries(prev).filter(([slotId]) => !slotId.includes(`-${normalized.id}-`))));
+    setRouteSuggestion(null);
+    closeUserForm();
+    refreshUi();
+    showToast(exists ? '利用者情報を更新しました' : '利用者を登録しました');
+  };
+
+  const handleOpenNurseEditor = (nurseId: string, dateKey: string, shiftId: string) => {
+    const nurse = nurses.find((item) => item.id === nurseId);
+    if (!nurse) {
+      showToast('看護師情報が見つかりませんでした。', 'error');
+      return;
+    }
+    const shift = workerShiftLookup[shiftId];
+    setNurseEditorDraft({
+      ...nurse,
+      editDateKey: dateKey,
+      shiftId,
+      shiftStart: shift?.start ?? '09:00',
+      shiftEnd: shift?.end ?? '18:00'
+    });
+  };
+
+  const handleSaveNurseEditor = async () => {
+    if (!nurseEditorDraft) return;
+    const original = nurses.find((item) => item.id === nurseEditorDraft.id);
+    if (!original) {
+      showToast('看護師情報が見つかりませんでした。', 'error');
+      return;
+    }
+    if (!nurseEditorDraft.name.trim()) {
+      showToast('看護師名を入力してください。', 'error');
+      return;
+    }
+
+    const { editDateKey, shiftId, shiftStart, shiftEnd, ...baseNurse } = nurseEditorDraft;
+    const startMinutes = timeToMinutes(shiftStart);
+    const endMinutes = timeToMinutes(shiftEnd);
+    if (!shiftStart || !shiftEnd || Number.isNaN(startMinutes) || Number.isNaN(endMinutes) || startMinutes >= endMinutes) {
+      showToast('看護師の勤務時間を正しく入力してください。', 'error');
+      return;
+    }
+
+    const baseDetails = { ...(original.monthlyShiftDetails ?? {}) };
+    const existingEntries = resolveEditableShiftEntriesForDate(original, editDateKey).filter((entry) => entry.id !== shiftId && !entry.deleted);
+    const originalEntry = resolveEditableShiftEntriesForDate(original, editDateKey).find((entry) => entry.id === shiftId);
+    const nextEntry: NurseShiftEntry = {
+      id: shiftId || crypto.randomUUID(),
+      dateKey: editDateKey,
+      start: shiftStart,
+      end: shiftEnd,
+      startMinutes,
+      endMinutes,
+      fixed: originalEntry?.fixed ?? false,
+      deleted: false
+    };
+
+    const nextNurse: Nurse = {
+      ...baseNurse,
+      monthlyShiftDetails: {
+        ...baseDetails,
+        [editDateKey]: [...existingEntries, nextEntry].sort((a, b) => a.startMinutes - b.startMinutes)
+      },
+      monthlyAvailabilityMonth: baseNurse.monthlyAvailabilityMonth || currentDate.toISOString().slice(0, 7)
+    };
+
+    await nurseRepo.upsert(nextNurse);
+
+    const nextUsers = users.map((user) => {
+      const matchedById = user.preferredNurseId === nextNurse.id;
+      const matchedByName = !user.preferredNurseId && (user.preferredNurseName === original.name || user.担当看護師名 === original.name);
+      if (!matchedById && !matchedByName) return user;
+      return normalizeUserRecord({
+        ...user,
+        preferredNurseId: nextNurse.id,
+        preferredNurseName: nextNurse.name,
+        担当看護師名: nextNurse.name
+      });
+    });
+    const changedUsers = nextUsers.filter((user, index) => user !== users[index]);
+    if (changedUsers.length) {
+      await Promise.all(changedUsers.map((user) => userRepo.upsert(user)));
+      setUsers(nextUsers);
+      setCsvText(serializeUsersToCsv(nextUsers));
+    }
+
+    const visitsToRefresh = scheduledVisits.filter((visit) => visit.nurseId === nextNurse.id || visit.nurseName === original.name || visit.preferredNurseId === nextNurse.id || visit.preferredNurseName === original.name);
+    if (visitsToRefresh.length) {
+      await Promise.all(visitsToRefresh.map((visit) => scheduleRepo.upsert({
+        ...visit,
+        nurseName: visit.nurseId === nextNurse.id ? nextNurse.name : visit.nurseName,
+        preferredNurseId: visit.preferredNurseId === nextNurse.id || visit.preferredNurseName === original.name ? nextNurse.id : visit.preferredNurseId,
+        preferredNurseName: visit.preferredNurseId === nextNurse.id || visit.preferredNurseName === original.name ? nextNurse.name : visit.preferredNurseName,
+        manuallyEdited: true
+      })));
+    }
+
+    setNurseEditorDraft(null);
+    refreshUi();
+    showToast('看護師情報を更新しました');
   };
 
   const handleSuggestRoute = async () => {
@@ -1171,6 +1472,32 @@ export default function App() {
         </div>
       )}
 
+
+      {userFormMode && userDraft && (
+        <UserFormModal
+          title={userFormMode === 'create' ? '新規利用者登録' : '利用者BOX編集'}
+          draft={userDraft}
+          nurses={nurses}
+          colorOptions={USER_COLOR_OPTIONS}
+          onChange={setUserDraft}
+          onClose={closeUserForm}
+          onSave={() => {
+            handleSaveUser().catch((error) => showToast(error instanceof Error ? error.message : '利用者情報の保存に失敗しました。', 'error'));
+          }}
+        />
+      )}
+
+      {nurseEditorDraft && (
+        <NurseEditorModal
+          draft={nurseEditorDraft}
+          onChange={(draft) => setNurseEditorDraft({ ...draft, shiftId: nurseEditorDraft.shiftId })}
+          onClose={() => setNurseEditorDraft(null)}
+          onSave={() => {
+            handleSaveNurseEditor().catch((error) => showToast(error instanceof Error ? error.message : '看護師情報の保存に失敗しました。', 'error'));
+          }}
+        />
+      )}
+
       <section className="board-tabs-grid">
         <BusinessTabsPanel
           businesses={businesses}
@@ -1267,11 +1594,19 @@ export default function App() {
           onUpdateCandidateTime={handleUpdateCandidateTime}
           onUpdateScheduledTime={handleUpdateScheduledTime}
           onUpdateWorkerShiftTime={(shiftId, start, end) => { handleUpdateWorkerShiftTime(shiftId, start, end).catch((error) => showToast(error instanceof Error ? error.message : '看護師シフト時間更新に失敗しました。', 'error')); }}
+          onCreateUserFromDate={handleCreateUserFromDate}
+          onOpenUserEditor={handleOpenUserEditor}
+          onOpenNurseEditor={handleOpenNurseEditor}
           viewMode={viewMode}
           periodLabel={formatMonthLabel(currentDate)}
           selectedNurseName={selectedNurseLabel}
         />
       </main>
+
+
+      {unscheduledCandidates.length > 0 && (
+        <CandidateList visits={unscheduledCandidates} areaColors={areaColors} onDragStart={setDraggedSlotId} />
+      )}
 
       <section className="scheduler-footer-grid">
         <section className="card panel csv-panel footer-panel">
@@ -1305,7 +1640,7 @@ export default function App() {
           <div className="compact-list scrollable-list footer-list">
             {users.length === 0 && <p className="empty">利用者はまだ読み込まれていません。</p>}
             {users.map((user) => (
-              <article key={user.id} className="mini-card footer-user-card">
+              <article key={user.id} className="mini-card footer-user-card clickable-card" onClick={() => handleOpenUserEditor(user.id)}>
                 <div className="split-line">
                   <strong>{user.利用者名}</strong>
                   <span className="badge footer-badge subtle">FIX {scheduledCountByUserId[user.id] ?? 0}</span>

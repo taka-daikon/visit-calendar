@@ -14,11 +14,12 @@ export function ConfirmedSchedulePanel({ visits, nurses, onUpdate, onRemove }: P
       <div className="compact-list scrollable-list">
         {visits.length === 0 && <p className="empty">確定訪問はまだありません。</p>}
         {visits.map((visit) => (
-          <article key={visit.slotId} className="mini-card confirmed-panel-card">
+          <article key={visit.slotId} className="mini-card confirmed-panel-card" style={{ borderLeft: `8px solid ${visit.boxColor || '#34d399'}` }}>
             <div className="split-line">
               <div>
                 <strong>{visit.userName}</strong>
                 <div className="card-subtext">{visit.address || visit.area}</div>
+                {visit.preferredNurseName && <div className="card-subtext">担当希望: {visit.preferredNurseName}</div>}
               </div>
               <button onClick={() => onRemove(visit.slotId)}>差し戻し</button>
             </div>
