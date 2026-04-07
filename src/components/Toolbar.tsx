@@ -2,6 +2,8 @@ import { ViewMode } from '../types';
 
 interface ToolbarProps {
   periodLabel: string;
+  reloadLabel: string;
+  businessName: string;
   viewMode: ViewMode;
   onChangeViewMode: (mode: ViewMode) => void;
   onPrev: () => void;
@@ -11,12 +13,13 @@ interface ToolbarProps {
   onAutoAssign: () => void;
 }
 
-export function Toolbar({ periodLabel, viewMode, onChangeViewMode, onPrev, onNext, onExportCsv, onExportPdf, onAutoAssign }: ToolbarProps) {
+export function Toolbar({ periodLabel, reloadLabel, businessName, viewMode, onChangeViewMode, onPrev, onNext, onExportCsv, onExportPdf, onAutoAssign }: ToolbarProps) {
   return (
     <header className="toolbar card">
       <div>
         <h1>訪問看護スケジューラ</h1>
-        <p className="toolbar-period-sub">現在表示: {periodLabel}</p>
+        <p className="toolbar-period-sub">現在表示: {periodLabel} / 事業所: {businessName}</p>
+        <p className="toolbar-refresh-sub">最終再読込: {reloadLabel}</p>
       </div>
       <div className="toolbar-actions">
         <button onClick={onPrev}>← 前へ</button>

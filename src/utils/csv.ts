@@ -4,17 +4,17 @@ const WEEKDAYS: WeekdayJa[] = ['日曜', '月曜', '火曜', '水曜', '木曜',
 const REQUIRED_HEADERS = ['利用者名', '居住地', '保険区分', '更新サイクル', '希望曜日', '希望性別', '希望処置内容'] as const;
 
 const HEADER_ALIASES: Record<string, string> = {
-  'お名前': '利用者名',
-  '氏名': '利用者名',
-  '利用者': '利用者名',
-  '住所': '居住地',
-  'エリア': '居住地',
-  '地域': '居住地',
-  '保険': '保険区分',
+  お名前: '利用者名',
+  氏名: '利用者名',
+  利用者: '利用者名',
+  住所: '居住地',
+  エリア: '居住地',
+  地域: '居住地',
+  保険: '保険区分',
   '希望曜日（複数可）': '希望曜日',
-  '曜日': '希望曜日',
+  曜日: '希望曜日',
   '希望性別（希望なし可）': '希望性別',
-  '処置内容': '希望処置内容'
+  処置内容: '希望処置内容'
 };
 
 function normalizeHeader(value: string): string {
@@ -89,7 +89,7 @@ export function parseCsv(text: string): UserRecord[] {
     return {
       id: `user-${index + 1}`,
       利用者名: record['利用者名'] || `利用者${index + 1}`,
-      居住地: record['居住地'] || '岡山市北区',
+      居住地: record['居住地'] || '岡山市北区奥田1-1-1',
       保険区分: normalizeInsurance(record['保険区分']),
       更新サイクル: record['更新サイクル'] || '1ヶ月',
       希望曜日: record['希望曜日'] || '',

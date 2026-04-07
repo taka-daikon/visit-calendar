@@ -1,11 +1,13 @@
-import { ChangeEvent, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertsPanel } from './components/AlertsPanel';
+import { BusinessTabsPanel } from './components/BusinessTabsPanel';
 import { CalendarView } from './components/CalendarView';
 import { CandidateList } from './components/CandidateList';
 import { CloudSyncPanel } from './components/CloudSyncPanel';
 import { ConfirmedSchedulePanel } from './components/ConfirmedSchedulePanel';
 import { ConflictWarningsPanel } from './components/ConflictWarningsPanel';
 import { DocumentsDashboard } from './components/DocumentsDashboard';
+import { DraftManagerPanel } from './components/DraftManagerPanel';
 import { FiltersPanel } from './components/FiltersPanel';
 import { NurseMasterPanel } from './components/NurseMasterPanel';
 import { ReportsPanel } from './components/ReportsPanel';
@@ -37,6 +39,12 @@ const VIEW_MODE_KEY = 'visit-calendar-view-mode';
 const FILTERS_KEY = 'visit-calendar-filters';
 const SELECTED_NURSE_KEY = 'visit-calendar-selected-nurse';
 const CSV_DRAFT_KEY = 'visit-calendar-csv-draft';
+const SCHEDULE_BACKUP_KEY = 'visit-calendar-schedule-backup';
+const ROUTE_SUGGESTION_KEY = 'visit-calendar-route-suggestion';
+const BUSINESS_STORAGE_KEY = 'visit-calendar-businesses';
+const ACTIVE_BUSINESS_KEY = 'visit-calendar-active-business';
+const BUSINESS_SNAPSHOT_KEY = 'visit-calendar-business-snapshots';
+const SAVED_DRAFTS_KEY = 'visit-calendar-saved-drafts';
 
 const userRepo = createUserRepo();
 const nurseRepo = createNurseRepo();
@@ -49,6 +57,40 @@ type WorkerAvailabilityItem = {
   nurseName: string;
   label: string;
   ranges: string[];
+};
+
+type BusinessWorkspace = {
+  id: string;
+  name: string;
+  createdAt: string;
+};
+
+type BusinessSnapshot = {
+  csvText: string;
+  users: UserRecord[];
+  nurses: Nurse[];
+  scheduledVisits: ScheduledVisit[];
+  hiddenCandidateIds: string[];
+  candidateOverrides: CandidateOverrideMap;
+  filters: Filters;
+  viewMode: ViewMode;
+  currentDateIso: string;
+  selectedNurseId: string;
+  routeSuggestion: RouteSuggestion | null;
+};
+
+type SavedScheduleDraft = BusinessSnapshot & {
+  id: string;
+  name: string;
+  businessId: string;
+  businessName: string;
+  savedAt: string;
+};
+
+const DEFAULT_BUSINESS: BusinessWorkspace = {
+  id: 'office-default',
+  name: '事業所1',
+  createdAt: today.toISOString()
 };
 
 function monthStart(date: Date): Date {
@@ -151,108 +193,83 @@ function resolveMovedVisit(visit: CandidateVisit, targetDateKey: string, nurses:
   };
 }
 
+function normalizeBusinesses(items: BusinessWorkspace[]): BusinessWorkspace[] {
+  if (items.length) return items;
+  return [DEFAULT_BUSINESS];
+}
+
+function buildEmptySnapshot(baseDate = new Date(START_YEAR, START_MONTH, today.getDate())): BusinessSnapshot {
+  return {
+    csvText: isDemoMode() ? sampleCsv : '',
+    users: [],
+    nurses: [],
+    scheduledVisits: [],
+    hiddenCandidateIds: [],
+    candidateOverrides: {},
+    filters: defaultFilters,
+    viewMode: 'month',
+    currentDateIso: baseDate.toISOString(),
+    selectedNurseId: '',
+    routeSuggestion: null
+  };
+}
+
+function scheduledMapFromVisits(visits: ScheduledVisit[]): Record<string, ScheduledVisit> {
+  return visits.reduce<Record<string, ScheduledVisit>>((acc, item) => {
+    acc[item.slotId] = item;
+    return acc;
+  }, {});
+}
+
+function scheduleBackupKeyForBusiness(businessId: string): string {
+  return `${SCHEDULE_BACKUP_KEY}.${businessId}`;
+}
+
+function sanitizeFileName(value: string): string {
+  return value.replace(/[\\/:*?"<>|\s]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'draft';
+}
+
 export default function App() {
-  const [csvText, setCsvText] = useState(() => {
-    if (isDemoMode()) return sampleCsv;
-    return loadFromStorage(CSV_DRAFT_KEY, '');
-  });
-  const [users, setUsers] = useState<UserRecord[]>([]);
-  const [nurses, setNurses] = useState<Nurse[]>([]);
-  const [scheduledMap, setScheduledMap] = useState<Record<string, ScheduledVisit>>({});
-  const [hiddenCandidateIds, setHiddenCandidateIds] = useState<string[]>(() => loadFromStorage(HIDDEN_CANDIDATE_KEY, []));
-  const [candidateOverrides, setCandidateOverrides] = useState<CandidateOverrideMap>(() => loadFromStorage(MOVED_CANDIDATE_KEY, {}));
-  const [filters, setFilters] = useState<Filters>(() => loadFromStorage(FILTERS_KEY, defaultFilters));
-  const [viewMode, setViewMode] = useState<ViewMode>(() => loadFromStorage(VIEW_MODE_KEY, 'month'));
-  const [currentDate, setCurrentDate] = useState<Date>(() => loadPersistedDate());
+  const initialBusinesses = normalizeBusinesses(loadFromStorage<BusinessWorkspace[]>(BUSINESS_STORAGE_KEY, []));
+  const initialActiveBusinessId = loadFromStorage<string>(ACTIVE_BUSINESS_KEY, initialBusinesses[0]?.id ?? DEFAULT_BUSINESS.id);
+  const activeBusinessExists = initialBusinesses.some((business) => business.id === initialActiveBusinessId);
+  const safeInitialBusinessId = activeBusinessExists ? initialActiveBusinessId : initialBusinesses[0].id;
+  const initialSnapshots = loadFromStorage<Record<string, BusinessSnapshot>>(BUSINESS_SNAPSHOT_KEY, {});
+  const initialSnapshot = initialSnapshots[safeInitialBusinessId] ?? null;
+  const initialDate = initialSnapshot?.currentDateIso ? new Date(initialSnapshot.currentDateIso) : loadPersistedDate();
+
+  const [businesses, setBusinesses] = useState<BusinessWorkspace[]>(initialBusinesses);
+  const [activeBusinessId, setActiveBusinessId] = useState(safeInitialBusinessId);
+  const [newBusinessName, setNewBusinessName] = useState('');
+  const [draftName, setDraftName] = useState('');
+  const [savedDrafts, setSavedDrafts] = useState<SavedScheduleDraft[]>(() => loadFromStorage<SavedScheduleDraft[]>(SAVED_DRAFTS_KEY, []));
+  const [csvText, setCsvText] = useState(() => initialSnapshot?.csvText ?? (isDemoMode() ? sampleCsv : loadFromStorage(CSV_DRAFT_KEY, '')));
+  const [users, setUsers] = useState<UserRecord[]>(() => initialSnapshot?.users ?? []);
+  const [nurses, setNurses] = useState<Nurse[]>(() => initialSnapshot?.nurses ?? []);
+  const [scheduledMap, setScheduledMap] = useState<Record<string, ScheduledVisit>>(() => scheduledMapFromVisits(initialSnapshot?.scheduledVisits ?? []));
+  const [hiddenCandidateIds, setHiddenCandidateIds] = useState<string[]>(() => initialSnapshot?.hiddenCandidateIds ?? loadFromStorage(HIDDEN_CANDIDATE_KEY, []));
+  const [candidateOverrides, setCandidateOverrides] = useState<CandidateOverrideMap>(() => initialSnapshot?.candidateOverrides ?? loadFromStorage(MOVED_CANDIDATE_KEY, {}));
+  const [filters, setFilters] = useState<Filters>(() => initialSnapshot?.filters ?? loadFromStorage(FILTERS_KEY, defaultFilters));
+  const [viewMode, setViewMode] = useState<ViewMode>(() => initialSnapshot?.viewMode ?? loadFromStorage(VIEW_MODE_KEY, 'month'));
+  const [currentDate, setCurrentDate] = useState<Date>(() => Number.isNaN(initialDate.getTime()) ? loadPersistedDate() : initialDate);
   const [draggedSlotId, setDraggedSlotId] = useState('');
-  const [selectedNurseId, setSelectedNurseId] = useState(() => loadFromStorage(SELECTED_NURSE_KEY, ''));
-  const [routeSuggestion, setRouteSuggestion] = useState<RouteSuggestion | null>(null);
+  const [selectedNurseId, setSelectedNurseId] = useState(() => initialSnapshot?.selectedNurseId ?? loadFromStorage(SELECTED_NURSE_KEY, ''));
+  const [routeSuggestion, setRouteSuggestion] = useState<RouteSuggestion | null>(() => initialSnapshot?.routeSuggestion ?? loadFromStorage<RouteSuggestion | null>(ROUTE_SUGGESTION_KEY, null));
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [toast, setToast] = useState<{ message: string; tone: 'success' | 'error' } | null>(null);
   const [syncState, setSyncState] = useState<SyncState>({ provider: currentSyncProvider(), connected: currentSyncProvider() !== 'local' });
   const [interactionVersion, setInteractionVersion] = useState(0);
+  const [scheduleHydrated, setScheduleHydrated] = useState(false);
+  const [lastReloadAt, setLastReloadAt] = useState('初期表示');
+  const previousBusinessIdRef = useRef(safeInitialBusinessId);
+  const hydratingBusinessRef = useRef(false);
 
-  useEffect(() => subscribeAuth(setAuthUser), []);
-  useEffect(() => saveToStorage(HIDDEN_CANDIDATE_KEY, hiddenCandidateIds), [hiddenCandidateIds]);
-  useEffect(() => saveToStorage(MOVED_CANDIDATE_KEY, candidateOverrides), [candidateOverrides]);
-  useEffect(() => saveToStorage(FILTERS_KEY, filters), [filters]);
-  useEffect(() => saveToStorage(VIEW_MODE_KEY, viewMode), [viewMode]);
-  useEffect(() => saveToStorage(CURRENT_DATE_KEY, currentDate.toISOString()), [currentDate]);
-  useEffect(() => saveToStorage(SELECTED_NURSE_KEY, selectedNurseId), [selectedNurseId]);
-  useEffect(() => saveToStorage(CSV_DRAFT_KEY, csvText), [csvText]);
-
-  useEffect(() => {
-    if (!toast) return undefined;
-    const timer = window.setTimeout(() => setToast(null), 2600);
-    return () => window.clearTimeout(timer);
-  }, [toast]);
-
-  useEffect(() => {
-    const unsubUsers = userRepo.subscribe((items) => {
-      setUsers(items);
-    });
-    const unsubNurses = nurseRepo.subscribe((items) => {
-      setNurses(items);
-    });
-    const unsubSchedules = scheduleRepo.subscribe((items) => {
-      setScheduledMap(items.reduce<Record<string, ScheduledVisit>>((acc, item) => {
-        acc[item.slotId] = item;
-        return acc;
-      }, {}));
-      setSyncState((prev) => ({ ...prev, lastSyncedAt: new Date().toISOString() }));
-    });
-    return () => {
-      unsubUsers();
-      unsubNurses();
-      unsubSchedules();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!authUser || !isDemoMode()) return;
-    if (!users.length) {
-      const parsed = parseCsv(sampleCsv);
-      setUsers(parsed);
-      parsed.forEach((item) => { userRepo.upsert(item); });
-    }
-    if (!nurses.length) {
-      setNurses(sampleNurses);
-      sampleNurses.forEach((item) => { nurseRepo.upsert(item); });
-    }
-  }, [authUser, users.length, nurses.length]);
-
-  const visibleDays = useMemo(() => getVisibleDays(currentDate, viewMode), [currentDate, viewMode]);
-  const areaList = useMemo(() => Array.from(new Set(users.map((user) => extractAreaName(user.居住地)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ja')), [users]);
-  const areaColors = useMemo(() => getAreaColors(areaList), [areaList]);
-
-  const baseCandidateVisits = useMemo(() => buildCandidateVisits(users, visibleDays), [users, visibleDays]);
-  const effectiveCandidateVisits = useMemo(
-    () => applyCandidateCustomizations(baseCandidateVisits, hiddenCandidateIds, candidateOverrides),
-    [baseCandidateVisits, hiddenCandidateIds, candidateOverrides]
-  );
-  const filteredCandidates = useMemo(() => applyFilters(effectiveCandidateVisits, filters), [effectiveCandidateVisits, filters]);
-  const unscheduledCandidates = useMemo(() => getUnscheduledCandidates(filteredCandidates, scheduledMap), [filteredCandidates, scheduledMap]);
   const scheduledVisits = useMemo(() => Object.values(scheduledMap).sort((a, b) => a.dateKey.localeCompare(b.dateKey) || a.startMinutes - b.startMinutes), [scheduledMap]);
-  const candidatesByDate = useMemo(() => groupByDate(unscheduledCandidates), [unscheduledCandidates]);
-  const scheduledByDate = useMemo(() => groupByDate(scheduledVisits), [scheduledVisits]);
-  const workerAvailabilityByDate = useMemo(
-    () => visibleDays.reduce<Record<string, WorkerAvailabilityItem[]>>((acc, day) => {
-      acc[day.dateKey] = buildWorkerAvailabilityForDate(nurses, day.dateKey);
-      return acc;
-    }, {}),
-    [visibleDays, nurses]
-  );
-
-  const alerts = useMemo(() => buildReviewAlerts(users, today), [users]);
-  const documents = useMemo(() => buildDocumentDeadlines(users, today), [users]);
-  const warnings = useMemo(() => buildConflictWarnings(scheduledVisits), [scheduledVisits]);
-  const routeKmByArea = useMemo(() => scheduledVisits.reduce<Record<string, number>>((acc, visit) => {
-    acc[visit.area] = (acc[visit.area] ?? 0) + (visit.estimatedTravelKm ?? 0);
-    return acc;
-  }, {}), [scheduledVisits]);
-  const report = useMemo(() => buildMonthlyReport(effectiveCandidateVisits, scheduledVisits, routeKmByArea), [effectiveCandidateVisits, scheduledVisits, routeKmByArea]);
+  const currentBusinessName = useMemo(() => businesses.find((item) => item.id === activeBusinessId)?.name ?? '事業所', [businesses, activeBusinessId]);
+  const scheduleBackupKey = useMemo(() => scheduleBackupKeyForBusiness(activeBusinessId), [activeBusinessId]);
+  const businessDrafts = useMemo(() => savedDrafts.filter((draft) => draft.businessId === activeBusinessId), [savedDrafts, activeBusinessId]);
 
   const showToast = (message: string, tone: 'success' | 'error' = 'success') => {
     setToast({ message, tone });
@@ -260,6 +277,54 @@ export default function App() {
 
   const refreshUi = () => {
     setInteractionVersion((prev) => prev + 1);
+    setLastReloadAt(new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+  };
+
+  const buildBusinessSnapshot = (): BusinessSnapshot => ({
+    csvText,
+    users,
+    nurses,
+    scheduledVisits,
+    hiddenCandidateIds,
+    candidateOverrides,
+    filters,
+    viewMode,
+    currentDateIso: currentDate.toISOString(),
+    selectedNurseId,
+    routeSuggestion
+  });
+
+  const persistSnapshotForBusiness = (businessId: string, snapshot: BusinessSnapshot) => {
+    const snapshotMap = loadFromStorage<Record<string, BusinessSnapshot>>(BUSINESS_SNAPSHOT_KEY, {});
+    snapshotMap[businessId] = snapshot;
+    saveToStorage(BUSINESS_SNAPSHOT_KEY, snapshotMap);
+    saveToStorage(scheduleBackupKeyForBusiness(businessId), snapshot.scheduledVisits);
+  };
+
+  const hydrateBusinessWorkspace = async (businessId: string, snapshot: BusinessSnapshot) => {
+    hydratingBusinessRef.current = true;
+    setScheduleHydrated(false);
+    setCsvText(snapshot.csvText);
+    setUsers(snapshot.users);
+    setNurses(snapshot.nurses);
+    setScheduledMap(scheduledMapFromVisits(snapshot.scheduledVisits));
+    setHiddenCandidateIds(snapshot.hiddenCandidateIds);
+    setCandidateOverrides(snapshot.candidateOverrides);
+    setFilters(snapshot.filters);
+    setViewMode(snapshot.viewMode);
+    const nextDate = new Date(snapshot.currentDateIso);
+    setCurrentDate(Number.isNaN(nextDate.getTime()) ? new Date(START_YEAR, START_MONTH, today.getDate()) : nextDate);
+    setSelectedNurseId(snapshot.selectedNurseId);
+    setRouteSuggestion(snapshot.routeSuggestion ?? null);
+
+    await Promise.all([userRepo.clear(), nurseRepo.clear(), scheduleRepo.clear()]);
+    await Promise.all(snapshot.users.map((item) => userRepo.upsert(item)));
+    await Promise.all(snapshot.nurses.map((item) => nurseRepo.upsert(item)));
+    await Promise.all(snapshot.scheduledVisits.map((item) => scheduleRepo.upsert(item)));
+    persistSnapshotForBusiness(businessId, snapshot);
+    hydratingBusinessRef.current = false;
+    setScheduleHydrated(true);
+    refreshUi();
   };
 
   const clearCandidateCustomizations = () => {
@@ -289,7 +354,8 @@ export default function App() {
         confirmedAt: new Date().toISOString(),
         nurseId: nurse.id,
         nurseName: nurse.name,
-        assignmentScore: score
+        assignmentScore: score,
+        manuallyEdited: true
       });
     });
 
@@ -370,6 +436,8 @@ export default function App() {
   const handleMoveCandidate = (targetDateKey: string, droppedSlotId?: string) => {
     const slotId = droppedSlotId || draggedSlotId;
     if (!slotId) return;
+    const visibleDays = getVisibleDays(currentDate, viewMode);
+    const effectiveCandidateVisits = applyCandidateCustomizations(buildCandidateVisits(users, visibleDays), hiddenCandidateIds, candidateOverrides);
     const visit = effectiveCandidateVisits.find((item) => item.slotId === slotId);
     if (!visit) return;
     const movedVisit = resolveMovedVisit(visit, targetDateKey, nurses);
@@ -391,6 +459,8 @@ export default function App() {
   };
 
   const handleConfirmCandidate = async (slotId: string) => {
+    const visibleDays = getVisibleDays(currentDate, viewMode);
+    const effectiveCandidateVisits = applyCandidateCustomizations(buildCandidateVisits(users, visibleDays), hiddenCandidateIds, candidateOverrides);
     const visit = effectiveCandidateVisits.find((item) => item.slotId === slotId);
     if (!visit) {
       showToast('候補が見つかりませんでした。', 'error');
@@ -412,6 +482,59 @@ export default function App() {
     showToast(nurse ? `候補を確定しました（${nurse.name}）` : '候補を確定しました（未割当）');
   };
 
+  const handleUpdateCandidateTime = (slotId: string, start: string, end: string) => {
+    const visibleDays = getVisibleDays(currentDate, viewMode);
+    const effectiveCandidateVisits = applyCandidateCustomizations(buildCandidateVisits(users, visibleDays), hiddenCandidateIds, candidateOverrides);
+    const visit = effectiveCandidateVisits.find((item) => item.slotId === slotId);
+    if (!visit) {
+      showToast('候補が見つかりませんでした。', 'error');
+      return;
+    }
+    const startMinutes = timeToMinutes(start);
+    const endMinutes = timeToMinutes(end);
+    if (!start || !end || Number.isNaN(startMinutes) || Number.isNaN(endMinutes) || startMinutes >= endMinutes) {
+      showToast('時間帯を正しく入力してください。', 'error');
+      return;
+    }
+    setCandidateOverrides((prev) => ({
+      ...prev,
+      [slotId]: {
+        ...prev[slotId],
+        start,
+        end,
+        startMinutes,
+        endMinutes
+      }
+    }));
+    setHiddenCandidateIds((prev) => prev.filter((id) => id !== slotId));
+    refreshUi();
+    showToast('候補の時間帯を10分単位で更新しました');
+  };
+
+  const handleUpdateScheduledTime = async (slotId: string, start: string, end: string) => {
+    const visit = scheduledMap[slotId];
+    if (!visit) {
+      showToast('確定スケジュールが見つかりませんでした。', 'error');
+      return;
+    }
+    const startMinutes = timeToMinutes(start);
+    const endMinutes = timeToMinutes(end);
+    if (!start || !end || Number.isNaN(startMinutes) || Number.isNaN(endMinutes) || startMinutes >= endMinutes) {
+      showToast('時間帯を正しく入力してください。', 'error');
+      return;
+    }
+    await scheduleRepo.upsert({
+      ...visit,
+      start,
+      end,
+      startMinutes,
+      endMinutes,
+      manuallyEdited: true
+    });
+    refreshUi();
+    showToast('確定スケジュールの時間帯を10分単位で更新しました');
+  };
+
   const handleRemoveCandidate = (slotId: string) => {
     setHiddenCandidateIds((prev) => (prev.includes(slotId) ? prev : [...prev, slotId]));
     setCandidateOverrides((prev) => {
@@ -430,7 +553,7 @@ export default function App() {
   };
 
   const handleUpdateScheduled = async (visit: ScheduledVisit) => {
-    await scheduleRepo.upsert(visit);
+    await scheduleRepo.upsert({ ...visit, manuallyEdited: true });
     refreshUi();
     showToast('スケジュールを更新しました');
   };
@@ -475,6 +598,93 @@ export default function App() {
     `);
   };
 
+  const handleSaveDraft = () => {
+    const name = draftName.trim() || `${currentBusinessName}-${formatMonthLabel(currentDate)}-下書き`;
+    const snapshot = buildBusinessSnapshot();
+    const draft: SavedScheduleDraft = {
+      id: crypto.randomUUID(),
+      name,
+      businessId: activeBusinessId,
+      businessName: currentBusinessName,
+      savedAt: new Date().toISOString(),
+      ...snapshot
+    };
+    setSavedDrafts((prev) => [draft, ...prev]);
+    persistSnapshotForBusiness(activeBusinessId, snapshot);
+    downloadTextFile(`schedule-draft-${sanitizeFileName(name)}.json`, JSON.stringify(draft, null, 2), 'application/json;charset=utf-8');
+    setDraftName('');
+    refreshUi();
+    showToast(`下書き「${name}」を保存しました`);
+  };
+
+  const handleRestoreDraft = async (draftId: string) => {
+    const draft = savedDrafts.find((item) => item.id === draftId);
+    if (!draft) {
+      showToast('復元する下書きが見つかりませんでした。', 'error');
+      return;
+    }
+    const snapshot: BusinessSnapshot = {
+      csvText: draft.csvText,
+      users: draft.users,
+      nurses: draft.nurses,
+      scheduledVisits: draft.scheduledVisits,
+      hiddenCandidateIds: draft.hiddenCandidateIds,
+      candidateOverrides: draft.candidateOverrides,
+      filters: draft.filters,
+      viewMode: draft.viewMode,
+      currentDateIso: draft.currentDateIso,
+      selectedNurseId: draft.selectedNurseId,
+      routeSuggestion: draft.routeSuggestion
+    };
+    if (!businesses.some((business) => business.id === draft.businessId)) {
+      setBusinesses((prev) => [...prev, { id: draft.businessId, name: draft.businessName, createdAt: draft.savedAt }]);
+    }
+    persistSnapshotForBusiness(draft.businessId, snapshot);
+    setActiveBusinessId(draft.businessId);
+    await hydrateBusinessWorkspace(draft.businessId, snapshot);
+    showToast(`下書き「${draft.name}」を復元しました`);
+  };
+
+  const handleDeleteDraft = (draftId: string) => {
+    setSavedDrafts((prev) => prev.filter((draft) => draft.id !== draftId));
+    refreshUi();
+    showToast('下書きを削除しました');
+  };
+
+  const handleAddBusiness = async () => {
+    const name = newBusinessName.trim();
+    if (!name) {
+      showToast('事業所名を入力してください。', 'error');
+      return;
+    }
+    if (businesses.some((business) => business.name === name)) {
+      showToast('同じ名前の事業所はすでに登録されています。', 'error');
+      return;
+    }
+    persistSnapshotForBusiness(activeBusinessId, buildBusinessSnapshot());
+    const nextBusiness: BusinessWorkspace = {
+      id: crypto.randomUUID(),
+      name,
+      createdAt: new Date().toISOString()
+    };
+    setBusinesses((prev) => [...prev, nextBusiness]);
+    persistSnapshotForBusiness(nextBusiness.id, buildEmptySnapshot(new Date(START_YEAR, START_MONTH, today.getDate())));
+    setNewBusinessName('');
+    setActiveBusinessId(nextBusiness.id);
+    await hydrateBusinessWorkspace(nextBusiness.id, buildEmptySnapshot(new Date(START_YEAR, START_MONTH, today.getDate())));
+    showToast(`事業所「${name}」を追加しました`);
+  };
+
+  const handleSwitchBusiness = async (businessId: string) => {
+    if (businessId === activeBusinessId) return;
+    persistSnapshotForBusiness(activeBusinessId, buildBusinessSnapshot());
+    const snapshotMap = loadFromStorage<Record<string, BusinessSnapshot>>(BUSINESS_SNAPSHOT_KEY, {});
+    const nextSnapshot = snapshotMap[businessId] ?? buildEmptySnapshot(new Date(START_YEAR, START_MONTH, today.getDate()));
+    setActiveBusinessId(businessId);
+    await hydrateBusinessWorkspace(businessId, nextSnapshot);
+    showToast('事業所を切り替えました');
+  };
+
   const handleSignIn = async () => {
     try {
       const user = await signIn(email, password);
@@ -486,6 +696,7 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
+    persistSnapshotForBusiness(activeBusinessId, buildBusinessSnapshot());
     await signOutUser();
     setAuthUser(null);
   };
@@ -496,6 +707,7 @@ export default function App() {
     setCsvText('');
     setUsers([]);
     setRouteSuggestion(null);
+    saveToStorage(scheduleBackupKey, []);
     refreshUi();
     showToast('利用者CSVを削除しました');
   };
@@ -505,6 +717,7 @@ export default function App() {
     await Promise.all([nurseRepo.clear(), scheduleRepo.clear()]);
     setNurses([]);
     setRouteSuggestion(null);
+    saveToStorage(scheduleBackupKey, []);
     refreshUi();
     showToast('ワーカーCSVを削除しました');
   };
@@ -537,6 +750,111 @@ export default function App() {
     refreshUi();
   };
 
+  useEffect(() => subscribeAuth(setAuthUser), []);
+  useEffect(() => saveToStorage(BUSINESS_STORAGE_KEY, businesses), [businesses]);
+  useEffect(() => saveToStorage(ACTIVE_BUSINESS_KEY, activeBusinessId), [activeBusinessId]);
+  useEffect(() => saveToStorage(SAVED_DRAFTS_KEY, savedDrafts), [savedDrafts]);
+  useEffect(() => saveToStorage(HIDDEN_CANDIDATE_KEY, hiddenCandidateIds), [hiddenCandidateIds]);
+  useEffect(() => saveToStorage(MOVED_CANDIDATE_KEY, candidateOverrides), [candidateOverrides]);
+  useEffect(() => saveToStorage(FILTERS_KEY, filters), [filters]);
+  useEffect(() => saveToStorage(VIEW_MODE_KEY, viewMode), [viewMode]);
+  useEffect(() => saveToStorage(CURRENT_DATE_KEY, currentDate.toISOString()), [currentDate]);
+  useEffect(() => saveToStorage(SELECTED_NURSE_KEY, selectedNurseId), [selectedNurseId]);
+  useEffect(() => saveToStorage(CSV_DRAFT_KEY, csvText), [csvText]);
+  useEffect(() => saveToStorage(ROUTE_SUGGESTION_KEY, routeSuggestion), [routeSuggestion]);
+
+  useEffect(() => {
+    if (hydratingBusinessRef.current) return;
+    persistSnapshotForBusiness(activeBusinessId, buildBusinessSnapshot());
+  }, [activeBusinessId, csvText, users, nurses, scheduledVisits, hiddenCandidateIds, candidateOverrides, filters, viewMode, currentDate, selectedNurseId, routeSuggestion]);
+
+  useEffect(() => {
+    if (!scheduleHydrated || hydratingBusinessRef.current) return;
+    saveToStorage(scheduleBackupKey, scheduledVisits);
+  }, [scheduleHydrated, scheduleBackupKey, scheduledVisits]);
+
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = window.setTimeout(() => setToast(null), 2600);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    const unsubUsers = userRepo.subscribe((items) => {
+      setUsers(items);
+    });
+    const unsubNurses = nurseRepo.subscribe((items) => {
+      setNurses(items);
+    });
+    const unsubSchedules = scheduleRepo.subscribe((items) => {
+      setScheduledMap(scheduledMapFromVisits(items));
+      setScheduleHydrated(true);
+      setSyncState((prev) => ({ ...prev, lastSyncedAt: new Date().toISOString() }));
+    });
+    return () => {
+      unsubUsers();
+      unsubNurses();
+      unsubSchedules();
+    };
+  }, []);
+
+  useEffect(() => {
+    previousBusinessIdRef.current = activeBusinessId;
+  }, [activeBusinessId]);
+
+  useEffect(() => {
+    if (!authUser || !isDemoMode()) return;
+    if (!users.length) {
+      const parsed = parseCsv(sampleCsv);
+      setUsers(parsed);
+      parsed.forEach((item) => {
+        userRepo.upsert(item);
+      });
+    }
+    if (!nurses.length) {
+      setNurses(sampleNurses);
+      sampleNurses.forEach((item) => {
+        nurseRepo.upsert(item);
+      });
+    }
+  }, [authUser, users.length, nurses.length]);
+
+  useEffect(() => {
+    if (!authUser || !scheduleHydrated || hydratingBusinessRef.current) return;
+    if (Object.keys(scheduledMap).length > 0) return;
+    const backup = loadFromStorage<ScheduledVisit[]>(scheduleBackupKey, []);
+    if (!backup.length) return;
+    Promise.all(backup.map((visit) => scheduleRepo.upsert(visit))).catch(() => undefined);
+  }, [authUser, scheduleHydrated, scheduledMap, scheduleBackupKey]);
+
+  const visibleDays = useMemo(() => getVisibleDays(currentDate, viewMode), [currentDate, viewMode]);
+  const areaList = useMemo(() => Array.from(new Set(users.map((user) => extractAreaName(user.居住地)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ja')), [users]);
+  const areaColors = useMemo(() => getAreaColors(areaList), [areaList]);
+  const baseCandidateVisits = useMemo(() => buildCandidateVisits(users, visibleDays), [users, visibleDays]);
+  const effectiveCandidateVisits = useMemo(
+    () => applyCandidateCustomizations(baseCandidateVisits, hiddenCandidateIds, candidateOverrides),
+    [baseCandidateVisits, hiddenCandidateIds, candidateOverrides]
+  );
+  const filteredCandidates = useMemo(() => applyFilters(effectiveCandidateVisits, filters), [effectiveCandidateVisits, filters]);
+  const unscheduledCandidates = useMemo(() => getUnscheduledCandidates(filteredCandidates, scheduledMap), [filteredCandidates, scheduledMap]);
+  const candidatesByDate = useMemo(() => groupByDate(unscheduledCandidates), [unscheduledCandidates]);
+  const scheduledByDate = useMemo(() => groupByDate(scheduledVisits), [scheduledVisits]);
+  const workerAvailabilityByDate = useMemo(
+    () => visibleDays.reduce<Record<string, WorkerAvailabilityItem[]>>((acc, day) => {
+      acc[day.dateKey] = buildWorkerAvailabilityForDate(nurses, day.dateKey);
+      return acc;
+    }, {}),
+    [visibleDays, nurses]
+  );
+  const alerts = useMemo(() => buildReviewAlerts(users, today), [users]);
+  const documents = useMemo(() => buildDocumentDeadlines(users, today), [users]);
+  const warnings = useMemo(() => buildConflictWarnings(scheduledVisits), [scheduledVisits]);
+  const routeKmByArea = useMemo(() => scheduledVisits.reduce<Record<string, number>>((acc, visit) => {
+    acc[visit.area] = (acc[visit.area] ?? 0) + (visit.estimatedTravelKm ?? 0);
+    return acc;
+  }, {}), [scheduledVisits]);
+  const report = useMemo(() => buildMonthlyReport(effectiveCandidateVisits, scheduledVisits, routeKmByArea), [effectiveCandidateVisits, scheduledVisits, routeKmByArea]);
+
   if (!authUser) {
     return (
       <div className="login-shell">
@@ -563,6 +881,8 @@ export default function App() {
       {toast && <div className={`toast toast-${toast.tone}`}>{toast.message}</div>}
       <Toolbar
         periodLabel={formatMonthLabel(currentDate)}
+        reloadLabel={lastReloadAt}
+        businessName={currentBusinessName}
         viewMode={viewMode}
         onChangeViewMode={(mode) => {
           setViewMode(mode);
@@ -573,6 +893,15 @@ export default function App() {
         onExportCsv={handleExportCsv}
         onExportPdf={handleExportPdf}
         onAutoAssign={handleAutoAssignClick}
+      />
+
+      <BusinessTabsPanel
+        businesses={businesses}
+        activeBusinessId={activeBusinessId}
+        newBusinessName={newBusinessName}
+        onChangeNewBusinessName={setNewBusinessName}
+        onAddBusiness={() => { handleAddBusiness().catch((error) => showToast(error instanceof Error ? error.message : '事業所追加に失敗しました。', 'error')); }}
+        onSwitchBusiness={(businessId) => { handleSwitchBusiness(businessId).catch((error) => showToast(error instanceof Error ? error.message : '事業所切替に失敗しました。', 'error')); }}
       />
 
       <section className="stats-grid">
@@ -587,7 +916,7 @@ export default function App() {
         <aside className="sidebar">
           <section className="card panel">
             <h2>CSV 管理画面</h2>
-            <p className="helper-text">ワーカーCSV読込後は日別の看護師予定を表示します。利用者候補はホバーで〇確定・×削除、ドラッグ＆ドロップで日付変更できます。各操作は自動保存され、再表示後も復元されます。</p>
+            <p className="helper-text">CSV取込後は利用者ボックスの時間を10分単位で微修正できます。〇で確定すると濃い色のFIX表示になり、確定欄へ自動移動します。すべての操作は事業所ごとに自動保存され、再表示後も復元されます。</p>
             <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} rows={10} />
             <div className="toolbar-actions left">
               <button className="primary" onClick={() => applyCsvText(csvText).catch((error) => showToast(error instanceof Error ? error.message : '利用者CSVの反映に失敗しました。', 'error'))}>CSV反映</button>
@@ -595,6 +924,14 @@ export default function App() {
               <button onClick={handleClearUsersCsv}>利用者CSV削除</button>
             </div>
           </section>
+          <DraftManagerPanel
+            draftName={draftName}
+            onChangeDraftName={setDraftName}
+            onSaveDraft={handleSaveDraft}
+            drafts={businessDrafts}
+            onRestoreDraft={(draftId) => { handleRestoreDraft(draftId).catch((error) => showToast(error instanceof Error ? error.message : '下書き復元に失敗しました。', 'error')); }}
+            onDeleteDraft={handleDeleteDraft}
+          />
           <CloudSyncPanel
             authUser={authUser}
             syncState={syncState}
@@ -624,10 +961,10 @@ export default function App() {
         <main className="content">
           <section className="card panel note-card">
             <h2>自動割当ロジック</h2>
-            <p>看護師の月別希望時間、勤務曜日、午前/午後可否、訪問可能スキル、希望性別、同一時間帯重複、日次上限、同一エリア継続性を総合評価して最適割当します。</p>
+            <p>看護師の月別希望時間、勤務曜日、午前/午後可否、訪問可能スキル、希望性別、同一時間帯重複、日次上限、同一エリア継続性を総合評価して最適割当します。各クリック・選択後は画面を即時再読込し、FIX色・確定欄・下書き保存へ反映します。</p>
           </section>
           <CalendarView
-            key={`calendar-${interactionVersion}-${formatDateKey(currentDate)}-${viewMode}`}
+            key={`calendar-${interactionVersion}-${formatDateKey(currentDate)}-${viewMode}-${activeBusinessId}`}
             days={visibleDays}
             candidatesByDate={candidatesByDate}
             scheduledByDate={scheduledByDate}
@@ -638,6 +975,8 @@ export default function App() {
             onConfirmCandidate={handleConfirmCandidate}
             onRemoveCandidate={handleRemoveCandidate}
             onRemoveScheduled={handleRemoveScheduled}
+            onUpdateCandidateTime={handleUpdateCandidateTime}
+            onUpdateScheduledTime={handleUpdateScheduledTime}
             viewMode={viewMode}
             periodLabel={formatMonthLabel(currentDate)}
           />

@@ -51,17 +51,8 @@ export function expandTimeRange(range: string): Array<{ start: string; end: stri
   if (!start || !end) return [];
   const startMinutes = timeToMinutes(start);
   const endMinutes = timeToMinutes(end);
-  const slots: Array<{ start: string; end: string; startMinutes: number; endMinutes: number }> = [];
-  for (let cursor = startMinutes; cursor < endMinutes; cursor += 30) {
-    const slotEnd = Math.min(cursor + 30, endMinutes);
-    slots.push({
-      start: minutesToTime(cursor),
-      end: minutesToTime(slotEnd),
-      startMinutes: cursor,
-      endMinutes: slotEnd
-    });
-  }
-  return slots;
+  if (Number.isNaN(startMinutes) || Number.isNaN(endMinutes) || startMinutes >= endMinutes) return [];
+  return [{ start, end, startMinutes, endMinutes }];
 }
 
 export function getAreaColors(areas: string[]): Record<string, string> {
@@ -76,12 +67,13 @@ export function buildCandidateVisits(users: UserRecord[], days: CalendarDay[]): 
     const weekday = WEEKDAY_LABELS[day.date.getDay()];
     return users.flatMap((user) => {
       if (!user.hopeDays.includes(weekday)) return [];
-      const timeRange = String(user[TIME_COLUMN_MAP[weekday]] || '');
-      if (!timeRange) return [];
+      const timeRange = String(user[TIME_COLUMN_MAP[weekday]] || '').trim();
+      const slots = expandTimeRange(timeRange);
+      if (!slots.length) return [];
       const address = String(user.居住地 ?? '').trim();
       const area = extractAreaName(address);
-      return expandTimeRange(timeRange).map((slot, index) => ({
-        slotId: `${day.dateKey}-${user.id}-${slot.start}-${index}`,
+      return slots.map((slot) => ({
+        slotId: `${day.dateKey}-${user.id}-${slot.start}-${slot.end}`,
         dateKey: day.dateKey,
         userId: user.id,
         userName: user.利用者名,
@@ -96,7 +88,7 @@ export function buildCandidateVisits(users: UserRecord[], days: CalendarDay[]): 
         ...slot
       }));
     });
-  }).sort((a, b) => a.startMinutes - b.startMinutes || a.area.localeCompare(b.area, 'ja') || a.userName.localeCompare(b.userName, 'ja'));
+  }).sort((a, b) => a.startMinutes - b.startMinutes || a.address.localeCompare(b.address, 'ja') || a.userName.localeCompare(b.userName, 'ja'));
 }
 
 export function applyFilters(visits: CandidateVisit[], filters: Filters): CandidateVisit[] {
