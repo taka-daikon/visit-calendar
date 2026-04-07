@@ -10,6 +10,7 @@ import { DocumentsDashboard } from './components/DocumentsDashboard';
 import { DraftManagerPanel } from './components/DraftManagerPanel';
 import { FiltersPanel } from './components/FiltersPanel';
 import { NurseMasterPanel } from './components/NurseMasterPanel';
+import { NurseShiftTabsPanel } from './components/NurseShiftTabsPanel';
 import { ReportsPanel } from './components/ReportsPanel';
 import { RouteSuggestionPanel } from './components/RouteSuggestionPanel';
 import { Toolbar } from './components/Toolbar';
@@ -19,7 +20,7 @@ import { currentSyncProvider, isDemoMode } from './services/appEnv';
 import { signIn, signOutUser, subscribeAuth } from './services/firebaseAuth';
 import { downloadTextFile, loadFromStorage, printHtml, saveToStorage } from './services/persistence';
 import { createNurseRepo, createScheduleRepo, createUserRepo } from './services/repository';
-import { AuthUser, CandidateVisit, Filters, Nurse, RouteSuggestion, ScheduledVisit, SyncState, UserRecord, ViewMode, WeekdayJa } from './types';
+import { AuthUser, CandidateVisit, Filters, Nurse, NurseShiftEntry, RouteSuggestion, ScheduledVisit, SyncState, UserRecord, ViewMode, WeekdayJa } from './types';
 import { applyFilters, buildCandidateVisits, extractAreaName, getAreaColors, getUnscheduledCandidates, groupByDate, minutesToTime, timeToMinutes } from './utils/calendar';
 import { parseCsv } from './utils/csv';
 import { START_MONTH, START_YEAR, WEEKDAY_LABELS, addMonths, formatDateKey, formatMonthLabel, getVisibleDays } from './utils/date';
@@ -53,8 +54,15 @@ const scheduleRepo = createScheduleRepo();
 type CandidateOverrideMap = Record<string, Partial<CandidateVisit>>;
 
 type WorkerAvailabilityItem = {
+  shiftId: string;
   nurseId: string;
   nurseName: string;
+  dateKey: string;
+  start: string;
+  end: string;
+  startMinutes: number;
+  endMinutes: number;
+  fixed: boolean;
   label: string;
   ranges: string[];
 };
@@ -109,36 +117,6 @@ function weekdayFromDateKey(dateKey: string): WeekdayJa {
   return WEEKDAY_LABELS[date.getDay()];
 }
 
-function buildWorkerAvailabilityForDate(nurses: Nurse[], dateKey: string): WorkerAvailabilityItem[] {
-  const visitMonth = dateKey.slice(0, 7);
-  const dayColumn = `${Number(dateKey.slice(8, 10))}日`;
-  const weekday = weekdayFromDateKey(dateKey);
-
-  return nurses
-    .filter((nurse) => nurse.active)
-    .flatMap((nurse) => {
-      const monthlyAvailability = nurse.monthlyAvailability ?? {};
-      const hasMonthly = Object.keys(monthlyAvailability).length > 0;
-      const targetMonth = nurse.monthlyAvailabilityMonth?.trim();
-
-      if (hasMonthly && (!targetMonth || targetMonth === visitMonth)) {
-        const raw = monthlyAvailability[dayColumn];
-        if (!raw) return [];
-        const ranges = raw.split('|').map((item) => item.trim()).filter(Boolean);
-        if (!ranges.length) return [];
-        return [{ nurseId: nurse.id, nurseName: nurse.name, label: ranges.join(' / '), ranges }];
-      }
-
-      if (!nurse.workingWeekdays.includes(weekday)) return [];
-      const ranges: string[] = [];
-      if (nurse.shiftAvailability.午前) ranges.push('09:00-12:00');
-      if (nurse.shiftAvailability.午後) ranges.push('13:00-18:00');
-      if (!ranges.length) return [];
-      return [{ nurseId: nurse.id, nurseName: nurse.name, label: ranges.join(' / '), ranges }];
-    })
-    .sort((a, b) => a.nurseName.localeCompare(b.nurseName, 'ja'));
-}
-
 function applyCandidateCustomizations(candidates: CandidateVisit[], hiddenIds: string[], overrides: CandidateOverrideMap): CandidateVisit[] {
   const hidden = new Set(hiddenIds);
   return candidates
@@ -157,11 +135,7 @@ function resolveMovedVisit(visit: CandidateVisit, targetDateKey: string, nurses:
   const workerAvailability = buildWorkerAvailabilityForDate(nurses, targetDateKey);
   const duration = visit.endMinutes - visit.startMinutes;
   const ranges = workerAvailability
-    .flatMap((worker) => worker.ranges)
-    .map((range) => {
-      const [start, end] = range.split('-').map((value) => value.trim());
-      return { start, end, startMinutes: timeToMinutes(start), endMinutes: timeToMinutes(end) };
-    })
+    .map((worker) => ({ start: worker.start, end: worker.end, startMinutes: worker.startMinutes, endMinutes: worker.endMinutes }))
     .filter((item) => Number.isFinite(item.startMinutes) && Number.isFinite(item.endMinutes))
     .sort((a, b) => a.startMinutes - b.startMinutes);
 
@@ -191,6 +165,85 @@ function resolveMovedVisit(visit: CandidateVisit, targetDateKey: string, nurses:
     startMinutes: nextStartMinutes,
     endMinutes: nextEndMinutes
   };
+}
+
+function toDayColumn(dateKey: string): string {
+  return `${Number(dateKey.slice(8, 10))}日`;
+}
+
+function buildShiftId(nurseId: string, dateKey: string, start: string, end: string, index = 0): string {
+  return `${nurseId}::${dateKey}::${start}-${end}::${index}`;
+}
+
+function parseShiftRanges(raw: string, nurseId: string, dateKey: string): NurseShiftEntry[] {
+  return raw
+    .split('|')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((range, index) => {
+      const [start, end] = range.split('-').map((value) => value.trim());
+      const startMinutes = timeToMinutes(start);
+      const endMinutes = timeToMinutes(end);
+      return {
+        id: buildShiftId(nurseId, dateKey, start, end, index),
+        dateKey,
+        start,
+        end,
+        startMinutes,
+        endMinutes,
+        fixed: false,
+        deleted: false
+      } satisfies NurseShiftEntry;
+    })
+    .filter((entry) => Number.isFinite(entry.startMinutes) && Number.isFinite(entry.endMinutes) && entry.startMinutes < entry.endMinutes);
+}
+
+function resolveEditableShiftEntriesForDate(nurse: Nurse, dateKey: string): NurseShiftEntry[] {
+  const explicit = nurse.monthlyShiftDetails?.[dateKey];
+  if (explicit) {
+    return explicit.map((entry, index) => ({
+      ...entry,
+      id: entry.id || buildShiftId(nurse.id, dateKey, entry.start, entry.end, index)
+    }));
+  }
+
+  const monthKey = dateKey.slice(0, 7);
+  const monthlyAvailability = nurse.monthlyAvailability ?? {};
+  const targetMonth = nurse.monthlyAvailabilityMonth?.trim();
+  if (Object.keys(monthlyAvailability).length > 0 && (!targetMonth || targetMonth === monthKey)) {
+    const raw = monthlyAvailability[toDayColumn(dateKey)];
+    if (raw) return parseShiftRanges(raw, nurse.id, dateKey);
+  }
+
+  const weekday = weekdayFromDateKey(dateKey);
+  if (!nurse.workingWeekdays.includes(weekday)) return [];
+  const ranges: string[] = [];
+  if (nurse.shiftAvailability.午前) ranges.push('09:00-12:00');
+  if (nurse.shiftAvailability.午後) ranges.push('13:00-18:00');
+  return parseShiftRanges(ranges.join('|'), nurse.id, dateKey);
+}
+
+function resolveVisibleShiftEntriesForDate(nurse: Nurse, dateKey: string): NurseShiftEntry[] {
+  return resolveEditableShiftEntriesForDate(nurse, dateKey).filter((entry) => !entry.deleted);
+}
+
+function buildWorkerAvailabilityForDate(nurses: Nurse[], dateKey: string): WorkerAvailabilityItem[] {
+  return nurses
+    .filter((nurse) => nurse.active)
+    .flatMap((nurse) => resolveVisibleShiftEntriesForDate(nurse, dateKey).map((entry) => ({
+      shiftId: entry.id,
+      nurseId: nurse.id,
+      nurseName: nurse.name,
+      dateKey,
+      start: entry.start,
+      end: entry.end,
+      startMinutes: entry.startMinutes,
+      endMinutes: entry.endMinutes,
+      fixed: Boolean(entry.fixed),
+      label: `${entry.fixed ? 'FIX ' : ''}${entry.start}-${entry.end}`,
+      ranges: [`${entry.start}-${entry.end}`]
+    })))
+    .sort((a, b) => a.nurseName.localeCompare(b.nurseName, 'ja') || a.startMinutes - b.startMinutes);
 }
 
 function normalizeBusinesses(items: BusinessWorkspace[]): BusinessWorkspace[] {
@@ -253,6 +306,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>(() => initialSnapshot?.viewMode ?? loadFromStorage(VIEW_MODE_KEY, 'month'));
   const [currentDate, setCurrentDate] = useState<Date>(() => Number.isNaN(initialDate.getTime()) ? loadPersistedDate() : initialDate);
   const [draggedSlotId, setDraggedSlotId] = useState('');
+  const [draggedWorkerShiftId, setDraggedWorkerShiftId] = useState('');
   const [selectedNurseId, setSelectedNurseId] = useState(() => initialSnapshot?.selectedNurseId ?? loadFromStorage(SELECTED_NURSE_KEY, ''));
   const [routeSuggestion, setRouteSuggestion] = useState<RouteSuggestion | null>(() => initialSnapshot?.routeSuggestion ?? loadFromStorage<RouteSuggestion | null>(ROUTE_SUGGESTION_KEY, null));
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -270,6 +324,10 @@ export default function App() {
   const currentBusinessName = useMemo(() => businesses.find((item) => item.id === activeBusinessId)?.name ?? '事業所', [businesses, activeBusinessId]);
   const scheduleBackupKey = useMemo(() => scheduleBackupKeyForBusiness(activeBusinessId), [activeBusinessId]);
   const businessDrafts = useMemo(() => savedDrafts.filter((draft) => draft.businessId === activeBusinessId), [savedDrafts, activeBusinessId]);
+  const selectedNurseLabel = useMemo(() => {
+    if (!selectedNurseId) return '全看護師';
+    return nurses.find((nurse) => nurse.id === selectedNurseId)?.name ?? '全看護師';
+  }, [nurses, selectedNurseId]);
 
   const showToast = (message: string, tone: 'success' | 'error' = 'success') => {
     setToast({ message, tone });
@@ -278,6 +336,22 @@ export default function App() {
   const refreshUi = () => {
     setInteractionVersion((prev) => prev + 1);
     setLastReloadAt(new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+  };
+
+  const persistNurseShiftChanges = async (
+    nurseId: string,
+    updater: (nurse: Nurse, details: Record<string, NurseShiftEntry[]>) => Record<string, NurseShiftEntry[]>
+  ) => {
+    const target = nurses.find((nurse) => nurse.id === nurseId);
+    if (!target) {
+      showToast('看護師シフトが見つかりませんでした。', 'error');
+      return false;
+    }
+    const baseDetails = { ...(target.monthlyShiftDetails ?? {}) };
+    const nextDetails = updater(target, baseDetails);
+    await nurseRepo.upsert({ ...target, monthlyShiftDetails: nextDetails, monthlyAvailabilityMonth: target.monthlyAvailabilityMonth || currentDate.toISOString().slice(0, 7) });
+    refreshUi();
+    return true;
   };
 
   const buildBusinessSnapshot = (): BusinessSnapshot => ({
@@ -535,6 +609,100 @@ export default function App() {
     showToast('確定スケジュールの時間帯を10分単位で更新しました');
   };
 
+  const handleMoveWorkerShift = async (targetDateKey: string, droppedShiftId?: string) => {
+    const shiftId = droppedShiftId || draggedWorkerShiftId;
+    const shift = workerShiftLookup[shiftId];
+    if (!shift) {
+      showToast('看護師シフトが見つかりませんでした。', 'error');
+      return;
+    }
+
+    const success = await persistNurseShiftChanges(shift.nurseId, (nurse, details) => {
+      const sourceEntries = resolveEditableShiftEntriesForDate(nurse, shift.dateKey).filter((entry) => entry.id !== shiftId);
+      const targetEntries = resolveEditableShiftEntriesForDate(nurse, targetDateKey);
+      const movedEntry: NurseShiftEntry = {
+        id: crypto.randomUUID(),
+        dateKey: targetDateKey,
+        start: shift.start,
+        end: shift.end,
+        startMinutes: shift.startMinutes,
+        endMinutes: shift.endMinutes,
+        fixed: shift.fixed,
+        deleted: false
+      };
+      return {
+        ...details,
+        [shift.dateKey]: sourceEntries,
+        [targetDateKey]: [...targetEntries.filter((entry) => !entry.deleted), movedEntry].sort((a, b) => a.startMinutes - b.startMinutes)
+      };
+    });
+
+    if (!success) return;
+    setDraggedWorkerShiftId('');
+    showToast('看護師シフトを移動しました');
+  };
+
+  const handleConfirmWorkerShift = async (shiftId: string) => {
+    const shift = workerShiftLookup[shiftId];
+    if (!shift) {
+      showToast('看護師シフトが見つかりませんでした。', 'error');
+      return;
+    }
+
+    const success = await persistNurseShiftChanges(shift.nurseId, (nurse, details) => ({
+      ...details,
+      [shift.dateKey]: resolveEditableShiftEntriesForDate(nurse, shift.dateKey).map((entry) => entry.id === shiftId ? { ...entry, fixed: true, deleted: false } : entry)
+    }));
+
+    if (!success) return;
+    showToast('看護師シフトを確定しました');
+  };
+
+  const handleRemoveWorkerShift = async (shiftId: string) => {
+    const shift = workerShiftLookup[shiftId];
+    if (!shift) {
+      showToast('看護師シフトが見つかりませんでした。', 'error');
+      return;
+    }
+
+    const success = await persistNurseShiftChanges(shift.nurseId, (nurse, details) => ({
+      ...details,
+      [shift.dateKey]: resolveEditableShiftEntriesForDate(nurse, shift.dateKey).filter((entry) => entry.id !== shiftId)
+    }));
+
+    if (!success) return;
+    showToast('看護師シフトを削除しました');
+  };
+
+  const handleUpdateWorkerShiftTime = async (shiftId: string, start: string, end: string) => {
+    const shift = workerShiftLookup[shiftId];
+    if (!shift) {
+      showToast('看護師シフトが見つかりませんでした。', 'error');
+      return;
+    }
+    const startMinutes = timeToMinutes(start);
+    const endMinutes = timeToMinutes(end);
+    if (!start || !end || Number.isNaN(startMinutes) || Number.isNaN(endMinutes) || startMinutes >= endMinutes) {
+      showToast('看護師シフトの時間帯を正しく入力してください。', 'error');
+      return;
+    }
+
+    const success = await persistNurseShiftChanges(shift.nurseId, (nurse, details) => ({
+      ...details,
+      [shift.dateKey]: resolveEditableShiftEntriesForDate(nurse, shift.dateKey).map((entry) => entry.id === shiftId ? {
+        ...entry,
+        start,
+        end,
+        startMinutes,
+        endMinutes,
+        deleted: false
+      } : entry).sort((a, b) => a.startMinutes - b.startMinutes)
+    }));
+
+    if (!success) return;
+    showToast('看護師シフトの時間帯を10分単位で更新しました');
+  };
+
   const handleRemoveCandidate = (slotId: string) => {
     setHiddenCandidateIds((prev) => (prev.includes(slotId) ? prev : [...prev, slotId]));
     setCandidateOverrides((prev) => {
@@ -716,6 +884,7 @@ export default function App() {
     clearCandidateCustomizations();
     await Promise.all([nurseRepo.clear(), scheduleRepo.clear()]);
     setNurses([]);
+    setSelectedNurseId('');
     setRouteSuggestion(null);
     saveToStorage(scheduleBackupKey, []);
     refreshUi();
@@ -838,13 +1007,31 @@ export default function App() {
   const filteredCandidates = useMemo(() => applyFilters(effectiveCandidateVisits, filters), [effectiveCandidateVisits, filters]);
   const unscheduledCandidates = useMemo(() => getUnscheduledCandidates(filteredCandidates, scheduledMap), [filteredCandidates, scheduledMap]);
   const candidatesByDate = useMemo(() => groupByDate(unscheduledCandidates), [unscheduledCandidates]);
-  const scheduledByDate = useMemo(() => groupByDate(scheduledVisits), [scheduledVisits]);
-  const workerAvailabilityByDate = useMemo(
+  const visibleScheduledVisits = useMemo(
+    () => selectedNurseId ? scheduledVisits.filter((visit) => visit.nurseId === selectedNurseId) : scheduledVisits,
+    [scheduledVisits, selectedNurseId]
+  );
+  const scheduledByDate = useMemo(() => groupByDate(visibleScheduledVisits), [visibleScheduledVisits]);
+  const allWorkerAvailabilityByDate = useMemo(
     () => visibleDays.reduce<Record<string, WorkerAvailabilityItem[]>>((acc, day) => {
       acc[day.dateKey] = buildWorkerAvailabilityForDate(nurses, day.dateKey);
       return acc;
     }, {}),
     [visibleDays, nurses]
+  );
+  const workerAvailabilityByDate = useMemo(
+    () => Object.entries(allWorkerAvailabilityByDate).reduce<Record<string, WorkerAvailabilityItem[]>>((acc, [dateKey, items]) => {
+      acc[dateKey] = selectedNurseId ? items.filter((item) => item.nurseId === selectedNurseId) : items;
+      return acc;
+    }, {}),
+    [allWorkerAvailabilityByDate, selectedNurseId]
+  );
+  const workerShiftLookup = useMemo(
+    () => Object.values(allWorkerAvailabilityByDate).flat().reduce<Record<string, WorkerAvailabilityItem>>((acc, item) => {
+      acc[item.shiftId] = item;
+      return acc;
+    }, {}),
+    [allWorkerAvailabilityByDate]
   );
   const alerts = useMemo(() => buildReviewAlerts(users, today), [users]);
   const documents = useMemo(() => buildDocumentDeadlines(users, today), [users]);
@@ -908,22 +1095,23 @@ export default function App() {
         <article className="stat-card"><span>利用者数</span><strong>{users.length}</strong></article>
         <article className="stat-card"><span>未割当候補</span><strong>{unscheduledCandidates.length}</strong></article>
         <article className="stat-card"><span>確定訪問</span><strong>{scheduledVisits.length}</strong></article>
+        <article className="stat-card"><span>表示中の確定</span><strong>{visibleScheduledVisits.length}</strong></article>
         <article className="stat-card"><span>看護師数</span><strong>{nurses.length}</strong></article>
         <article className="stat-card"><span>重複警告</span><strong>{warnings.length}</strong></article>
       </section>
 
-      <div className="main-grid">
-        <aside className="sidebar">
-          <section className="card panel">
-            <h2>CSV 管理画面</h2>
-            <p className="helper-text">CSV取込後は利用者ボックスの時間を10分単位で微修正できます。〇で確定すると濃い色のFIX表示になり、確定欄へ自動移動します。すべての操作は事業所ごとに自動保存され、再表示後も復元されます。</p>
-            <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} rows={10} />
-            <div className="toolbar-actions left">
-              <button className="primary" onClick={() => applyCsvText(csvText).catch((error) => showToast(error instanceof Error ? error.message : '利用者CSVの反映に失敗しました。', 'error'))}>CSV反映</button>
-              <input type="file" accept=".csv,text/csv" onChange={handleCsvFile} />
-              <button onClick={handleClearUsersCsv}>利用者CSV削除</button>
-            </div>
-          </section>
+      <section className="top-control-grid">
+        <section className="card panel csv-panel">
+          <h2>CSV 管理画面</h2>
+          <p className="helper-text">利用者CSVと看護師CSVの読込は上部に集約し、左側の占有を減らしました。時間編集後の表示は即時反映され、〇で確定すると濃いFIX表示へ切り替わります。</p>
+          <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} rows={7} />
+          <div className="toolbar-actions left csv-actions-wrap">
+            <button className="primary" onClick={() => applyCsvText(csvText).catch((error) => showToast(error instanceof Error ? error.message : '利用者CSVの反映に失敗しました。', 'error'))}>利用者CSV反映</button>
+            <input type="file" accept=".csv,text/csv" onChange={handleCsvFile} />
+            <button onClick={handleClearUsersCsv}>利用者CSV削除</button>
+          </div>
+        </section>
+        <div className="top-control-stack">
           <DraftManagerPanel
             draftName={draftName}
             onChangeDraftName={setDraftName}
@@ -932,6 +1120,20 @@ export default function App() {
             onRestoreDraft={(draftId) => { handleRestoreDraft(draftId).catch((error) => showToast(error instanceof Error ? error.message : '下書き復元に失敗しました。', 'error')); }}
             onDeleteDraft={handleDeleteDraft}
           />
+          <NurseShiftTabsPanel
+            nurses={nurses}
+            selectedNurseId={selectedNurseId}
+            onSelectNurseId={(value) => {
+              setSelectedNurseId(value);
+              setRouteSuggestion(null);
+              refreshUi();
+            }}
+          />
+        </div>
+      </section>
+
+      <div className="main-grid">
+        <aside className="sidebar">
           <CloudSyncPanel
             authUser={authUser}
             syncState={syncState}
@@ -953,10 +1155,11 @@ export default function App() {
           <ReportsPanel report={report} />
           <RouteSuggestionPanel nurses={nurses} selectedNurseId={selectedNurseId} onSelectNurseId={(value) => {
             setSelectedNurseId(value);
+            setRouteSuggestion(null);
             refreshUi();
           }} route={routeSuggestion} onSuggest={handleSuggestRoute} />
           <CandidateList key={`candidate-list-${interactionVersion}`} visits={unscheduledCandidates} areaColors={areaColors} onDragStart={setDraggedSlotId} />
-          <ConfirmedSchedulePanel key={`confirmed-list-${interactionVersion}`} visits={scheduledVisits} nurses={nurses} onUpdate={handleUpdateScheduled} onRemove={handleRemoveScheduled} />
+          <ConfirmedSchedulePanel key={`confirmed-list-${interactionVersion}`} visits={visibleScheduledVisits} nurses={nurses} onUpdate={handleUpdateScheduled} onRemove={handleRemoveScheduled} />
         </aside>
         <main className="content">
           <section className="card panel note-card">
@@ -971,14 +1174,20 @@ export default function App() {
             workerAvailabilityByDate={workerAvailabilityByDate}
             areaColors={areaColors}
             onDragStart={setDraggedSlotId}
+            onDragStartWorkerShift={setDraggedWorkerShiftId}
             onDropCandidate={handleMoveCandidate}
+            onDropWorkerShift={(dateKey, shiftId) => { handleMoveWorkerShift(dateKey, shiftId).catch((error) => showToast(error instanceof Error ? error.message : '看護師シフト移動に失敗しました。', 'error')); }}
             onConfirmCandidate={handleConfirmCandidate}
             onRemoveCandidate={handleRemoveCandidate}
             onRemoveScheduled={handleRemoveScheduled}
+            onConfirmWorkerShift={(shiftId) => { handleConfirmWorkerShift(shiftId).catch((error) => showToast(error instanceof Error ? error.message : '看護師シフト確定に失敗しました。', 'error')); }}
+            onRemoveWorkerShift={(shiftId) => { handleRemoveWorkerShift(shiftId).catch((error) => showToast(error instanceof Error ? error.message : '看護師シフト削除に失敗しました。', 'error')); }}
             onUpdateCandidateTime={handleUpdateCandidateTime}
             onUpdateScheduledTime={handleUpdateScheduledTime}
+            onUpdateWorkerShiftTime={(shiftId, start, end) => { handleUpdateWorkerShiftTime(shiftId, start, end).catch((error) => showToast(error instanceof Error ? error.message : '看護師シフト時間更新に失敗しました。', 'error')); }}
             viewMode={viewMode}
             periodLabel={formatMonthLabel(currentDate)}
+            selectedNurseName={selectedNurseLabel}
           />
         </main>
       </div>

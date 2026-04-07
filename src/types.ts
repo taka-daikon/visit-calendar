@@ -65,6 +65,13 @@ export interface ScheduledVisit extends CandidateVisit {
   estimatedTravelKm?: number;
 }
 
+export interface NurseShiftEntry extends TimeSlot {
+  id: string;
+  dateKey: string;
+  fixed?: boolean;
+  deleted?: boolean;
+}
+
 export interface Nurse {
   id: string;
   name: string;
@@ -81,6 +88,7 @@ export interface Nurse {
   areas: string[];
   monthlyAvailabilityMonth?: string;
   monthlyAvailability?: Record<string, string>;
+  monthlyShiftDetails?: Record<string, NurseShiftEntry[]>;
 }
 
 export interface Filters {

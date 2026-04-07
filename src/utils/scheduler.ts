@@ -18,6 +18,13 @@ function withinRange(range: string, visit: CandidateVisit | ScheduledVisit): boo
 }
 
 function nurseAvailableOnDate(nurse: Nurse, visit: CandidateVisit): boolean {
+  const explicit = nurse.monthlyShiftDetails?.[visit.dateKey];
+  if (explicit) {
+    const availableEntries = explicit.filter((entry) => !entry.deleted);
+    if (!availableEntries.length) return false;
+    return availableEntries.some((entry) => visit.startMinutes >= entry.startMinutes && visit.endMinutes <= entry.endMinutes);
+  }
+
   const dayKey = `${new Date(visit.dateKey).getDate()}日`;
   const monthlyAvailability = nurse.monthlyAvailability ?? {};
   const hasMonthlyRules = Object.keys(monthlyAvailability).length > 0;

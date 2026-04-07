@@ -19,7 +19,7 @@ export function CandidateList({ visits, areaColors, onDragStart }: Props) {
             draggable
             onDragStart={(e) => {
               e.dataTransfer.effectAllowed = 'move';
-              e.dataTransfer.setData('text/plain', visit.slotId);
+              e.dataTransfer.setData('text/plain', `candidate:${visit.slotId}`);
               onDragStart(visit.slotId);
             }}
             style={{ borderLeftColor: areaColors[visit.area] ?? '#cbd5e1' }}
@@ -31,7 +31,7 @@ export function CandidateList({ visits, areaColors, onDragStart }: Props) {
               </div>
               <span className="badge" style={{ background: areaColors[visit.area] ?? '#eef2ff' }}>{visit.area}</span>
             </div>
-            <div>{visit.dateKey} [{visit.start}-{visit.end}]</div>
+            <div>{visit.dateKey} / 時間: {visit.start} - {visit.end}</div>
             <div>{visit.insuranceType} / {visit.treatment}</div>
             <div>希望性別: {visit.genderPreference}</div>
           </article>
