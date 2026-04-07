@@ -459,7 +459,7 @@ export default function App() {
       businessId: activeBusinessId,
       businessName: currentBusinessName,
       deleted,
-      deletedAt: deleted ? now : undefined,
+      ...(deleted ? { deletedAt: now } : {}),
       archivedAt: now
     } satisfies UserArchiveRecord;
   };

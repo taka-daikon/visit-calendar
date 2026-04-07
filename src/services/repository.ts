@@ -16,6 +16,22 @@ function itemId<T extends { id?: string; slotId?: string }>(item: T): string {
   return item.id ?? item.slotId ?? crypto.randomUUID();
 }
 
+function stripUndefinedDeep<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => item !== undefined)
+      .map((item) => stripUndefinedDeep(item)) as T;
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined)
+        .map(([key, item]) => [key, stripUndefinedDeep(item)])
+    ) as T;
+  }
+  return value;
+}
+
 function createLocalRepo<T extends { id?: string; slotId?: string }>(storageKey: string): RealtimeRepo<T> {
   return {
     async list() {
@@ -56,7 +72,8 @@ function createFirebaseRepo<T extends { id?: string; slotId?: string }>(collecti
       return snapshot.docs.map((docItem) => docItem.data() as T);
     },
     async upsert(item) {
-      await setDoc(doc(services.db, collectionName, itemId(item)), item, { merge: true });
+      const sanitized = stripUndefinedDeep(item);
+      await setDoc(doc(services.db, collectionName, itemId(item)), sanitized, { merge: true });
     },
     async remove(id) {
       await deleteDoc(doc(services.db, collectionName, id));
