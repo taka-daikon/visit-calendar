@@ -12,6 +12,8 @@ const TIME_COLUMN_MAP: Record<WeekdayJa, keyof UserRecord> = {
   土曜: '土曜希望時間'
 };
 
+const DEFAULT_SERVICE_DURATION_MINUTES = 30;
+
 export const AREA_COORDS: Record<string, { lat: number; lng: number; color: string }> = {
   '岡山市北区': { lat: 34.6617, lng: 133.935, color: '#E6F4EA' },
   '岡山市中区': { lat: 34.6552, lng: 133.9694, color: '#FFF5D6' },
@@ -47,12 +49,18 @@ export function minutesToTime(minutes: number): string {
 
 export function expandTimeRange(range: string): Array<{ start: string; end: string; startMinutes: number; endMinutes: number }> {
   if (!range) return [];
-  const [start, end] = range.split('-').map((value) => value.trim());
-  if (!start || !end) return [];
-  const startMinutes = timeToMinutes(start);
-  const endMinutes = timeToMinutes(end);
-  if (Number.isNaN(startMinutes) || Number.isNaN(endMinutes) || startMinutes >= endMinutes) return [];
-  return [{ start, end, startMinutes, endMinutes }];
+  return range
+    .split('|')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .flatMap((item) => {
+      const [start, end] = item.split('-').map((value) => value.trim());
+      if (!start || !end) return [];
+      const startMinutes = timeToMinutes(start);
+      const endMinutes = timeToMinutes(end);
+      if (Number.isNaN(startMinutes) || Number.isNaN(endMinutes) || startMinutes >= endMinutes) return [];
+      return [{ start, end, startMinutes, endMinutes }];
+    });
 }
 
 export function getAreaColors(areas: string[]): Record<string, string> {
@@ -72,26 +80,39 @@ export function buildCandidateVisits(users: UserRecord[], days: CalendarDay[]): 
       if (!slots.length) return [];
       const address = String(user.居住地 ?? '').trim();
       const area = extractAreaName(address);
-      return slots.map((slot) => ({
-        slotId: `${day.dateKey}-${user.id}-${slot.start}-${slot.end}`,
-        dateKey: day.dateKey,
-        userId: user.id,
-        userName: user.利用者名,
-        address,
-        area,
-        insuranceType: user.保険区分,
-        updateCycle: user.更新サイクル,
-        genderPreference: user.希望性別,
-        treatment: user.希望処置内容,
-        requiredSkills: inferSkills(user.希望処置内容),
-        weekday,
-        boxColor: user.boxColor || user.カラー || '',
-        preferredNurseId: user.preferredNurseId,
-        preferredNurseName: user.preferredNurseName || user.担当看護師名 || '',
-        ...slot
-      }));
+      return slots.map((slot) => {
+        const serviceDurationMinutes = Math.max(15, Math.min(DEFAULT_SERVICE_DURATION_MINUTES, slot.endMinutes - slot.startMinutes));
+        const startMinutes = slot.startMinutes;
+        const endMinutes = Math.min(slot.endMinutes, slot.startMinutes + serviceDurationMinutes);
+        return {
+          slotId: `${day.dateKey}-${user.id}-${slot.start}-${slot.end}`,
+          dateKey: day.dateKey,
+          userId: user.id,
+          userName: user.利用者名,
+          address,
+          area,
+          insuranceType: user.保険区分,
+          updateCycle: user.更新サイクル,
+          genderPreference: user.希望性別,
+          treatment: user.希望処置内容,
+          requiredSkills: inferSkills(user.希望処置内容),
+          weekday,
+          boxColor: user.boxColor || user.カラー || '',
+          preferredNurseId: user.preferredNurseId,
+          preferredNurseName: user.preferredNurseName || user.担当看護師名 || '',
+          windowStart: slot.start,
+          windowEnd: slot.end,
+          windowStartMinutes: slot.startMinutes,
+          windowEndMinutes: slot.endMinutes,
+          serviceDurationMinutes,
+          start: minutesToTime(startMinutes),
+          end: minutesToTime(endMinutes),
+          startMinutes,
+          endMinutes
+        } satisfies CandidateVisit;
+      });
     });
-  }).sort((a, b) => a.startMinutes - b.startMinutes || a.address.localeCompare(b.address, 'ja') || a.userName.localeCompare(b.userName, 'ja'));
+  }).sort((a, b) => a.dateKey.localeCompare(b.dateKey) || a.windowStartMinutes - b.windowStartMinutes || a.address.localeCompare(b.address, 'ja') || a.userName.localeCompare(b.userName, 'ja'));
 }
 
 export function applyFilters(visits: CandidateVisit[], filters: Filters): CandidateVisit[] {

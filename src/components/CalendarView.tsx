@@ -23,9 +23,11 @@ interface Props {
   areaColors: Record<string, string>;
   onDragStart: (slotId: string) => void;
   onDragStartWorkerShift: (shiftId: string) => void;
+  onDragStartScheduled: (slotId: string) => void;
   onDropCandidate: (dateKey: string, slotId?: string) => void;
   onDropWorkerShift: (dateKey: string, shiftId?: string) => void;
   onDropCandidateToFixed: (dateKey: string, slotId?: string) => void;
+  onDropScheduled: (dateKey: string, slotId?: string) => void;
   onConfirmCandidate: (slotId: string) => void;
   onRemoveCandidate: (slotId: string) => void;
   onRemoveScheduled: (slotId: string) => void;
@@ -59,7 +61,7 @@ function groupVisitsByAddress<T extends CandidateVisit | ScheduledVisit>(visits:
   return Object.entries(grouped)
     .map(([address, items]) => ({
       address,
-      visits: [...items].sort((a, b) => Number(Boolean(b.preferredNurseName)) - Number(Boolean(a.preferredNurseName)) || a.startMinutes - b.startMinutes || a.userName.localeCompare(b.userName, 'ja'))
+      visits: [...items].sort((a, b) => a.startMinutes - b.startMinutes || a.userName.localeCompare(b.userName, 'ja'))
     }))
     .sort((a, b) => a.address.localeCompare(b.address, 'ja'));
 }
@@ -74,7 +76,9 @@ function accentStyle(color?: string) {
 
 function compactAddress(address?: string): string {
   const value = (address || '').trim();
-  return value || '住所未設定';
+  if (!value) return '住所未設定';
+  const matched = value.match(/^.*?\d+(?:-\d+)*/);
+  return matched?.[0] || value;
 }
 
 export function CalendarView({
@@ -85,9 +89,11 @@ export function CalendarView({
   areaColors,
   onDragStart,
   onDragStartWorkerShift,
+  onDragStartScheduled,
   onDropCandidate,
   onDropWorkerShift,
   onDropCandidateToFixed,
+  onDropScheduled,
   onConfirmCandidate,
   onRemoveCandidate,
   onRemoveScheduled,
@@ -104,17 +110,16 @@ export function CalendarView({
   duplicateNurseIds,
   duplicateNurseTooltips,
   viewMode,
-  periodLabel,
-  selectedNurseName
+  periodLabel
 }: Props) {
   const className = viewMode === 'month' ? 'calendar-grid month-grid' : viewMode === 'week' ? 'calendar-grid week-grid' : 'calendar-grid day-grid';
   const [editingCandidateId, setEditingCandidateId] = useState('');
   const [editingScheduledId, setEditingScheduledId] = useState('');
   const [editingWorkerId, setEditingWorkerId] = useState('');
   const [editStart, setEditStart] = useState('');
+  const [editEnd, setEditEnd] = useState('');
   const duplicateIdSet = useMemo(() => new Set(duplicateUserIds), [duplicateUserIds]);
   const duplicateNurseIdSet = useMemo(() => new Set(duplicateNurseIds), [duplicateNurseIds]);
-  const [editEnd, setEditEnd] = useState('');
 
   const candidateGroupsByDate = useMemo(() => Object.fromEntries(
     Object.entries(candidatesByDate).map(([dateKey, visits]) => [dateKey, groupVisitsByAddress(visits)])
@@ -154,24 +159,6 @@ export function CalendarView({
     setEditingWorkerId('');
     setEditStart('');
     setEditEnd('');
-  };
-
-  const saveCandidateEdit = () => {
-    if (!editingCandidateId) return;
-    onUpdateCandidateTime(editingCandidateId, editStart, editEnd);
-    cancelEdit();
-  };
-
-  const saveScheduledEdit = () => {
-    if (!editingScheduledId) return;
-    onUpdateScheduledTime(editingScheduledId, editStart, editEnd);
-    cancelEdit();
-  };
-
-  const saveWorkerEdit = () => {
-    if (!editingWorkerId) return;
-    onUpdateWorkerShiftTime(editingWorkerId, editStart, editEnd);
-    cancelEdit();
   };
 
   const renderDuplicateBadge = (userId: string) => {
@@ -224,6 +211,10 @@ export function CalendarView({
                 const payload = e.dataTransfer.getData('text/plain');
                 if (payload.startsWith('worker:')) {
                   onDropWorkerShift(day.dateKey, payload.replace(/^worker:/, ''));
+                  return;
+                }
+                if (payload.startsWith('scheduled:')) {
+                  onDropScheduled(day.dateKey, payload.replace(/^scheduled:/, ''));
                   return;
                 }
                 if (payload.startsWith('candidate:')) {
@@ -283,7 +274,7 @@ export function CalendarView({
                               </label>
                             </div>
                             <div className="time-edit-actions">
-                              <button className={`small-action ${shift.fixed ? 'light-action' : 'primary-soft'}`} onClick={saveWorkerEdit}>保存</button>
+                              <button className={`small-action ${shift.fixed ? 'light-action' : 'primary-soft'}`} onClick={() => { onUpdateWorkerShiftTime(shift.shiftId, editStart, editEnd); cancelEdit(); }}>保存</button>
                               <button className={`small-action ${shift.fixed ? 'light-action' : ''}`} onClick={cancelEdit}>戻る</button>
                             </div>
                           </div>
@@ -313,7 +304,7 @@ export function CalendarView({
                     <div className="address-group-list">
                       {group.visits.map((visit) => {
                         const isEditing = editingCandidateId === visit.slotId;
-                        const accent = visit.boxColor || areaColors[visit.area] || '#cbd5e1';
+                        const accent = duplicateIdSet.has(visit.userId) ? '#dc2626' : (visit.boxColor || areaColors[visit.area] || '#cbd5e1');
                         return (
                           <div
                             key={visit.slotId}
@@ -336,7 +327,7 @@ export function CalendarView({
                               <div className="calendar-item-title">{visit.userName}</div>
                               {renderDuplicateBadge(visit.userId)}
                               <div className="calendar-item-sub">{visit.address || visit.area}</div>
-                              <div className="calendar-item-meta">{visit.start} - {visit.end} / 担当希望: {visit.preferredNurseName || '未指定'}</div>
+                              <div className="calendar-item-meta">{visit.start} - {visit.end} / 希望枠 {visit.windowStart} - {visit.windowEnd}</div>
                               {isEditing && (
                                 <div className="time-edit-panel" onClick={(event) => event.stopPropagation()}>
                                   <div className="time-edit-current">現在: {visit.start} - {visit.end}</div>
@@ -351,7 +342,7 @@ export function CalendarView({
                                     </label>
                                   </div>
                                   <div className="time-edit-actions">
-                                    <button className="small-action primary-soft" onClick={saveCandidateEdit}>保存</button>
+                                    <button className="small-action primary-soft" onClick={() => { onUpdateCandidateTime(visit.slotId, editStart, editEnd); cancelEdit(); }}>保存</button>
                                     <button className="small-action" onClick={cancelEdit}>戻る</button>
                                   </div>
                                 </div>
@@ -383,6 +374,10 @@ export function CalendarView({
                   event.preventDefault();
                   event.stopPropagation();
                   const payload = event.dataTransfer.getData('text/plain');
+                  if (payload.startsWith('scheduled:')) {
+                    onDropScheduled(day.dateKey, payload.replace(/^scheduled:/, ''));
+                    return;
+                  }
                   if (!payload.startsWith('candidate:')) return;
                   onDropCandidateToFixed(day.dateKey, payload.replace(/^candidate:/, ''));
                 }}
@@ -398,22 +393,29 @@ export function CalendarView({
                     <div className="address-group-list">
                       {group.visits.map((visit) => {
                         const isEditing = editingScheduledId === visit.slotId;
-                        const accent = visit.boxColor || areaColors[visit.area] || '#34d399';
                         return (
                           <div
                             key={visit.slotId}
-                            className={`calendar-item confirmed confirmed-fixed magnet-card ${isEditing ? 'editing-card' : ''} ${duplicateIdSet.has(visit.userId) ? 'duplicate-user-box' : ''}`}
-                            style={accentStyle('#166534')}
+                            className={`calendar-item confirmed confirmed-fixed removable magnet-card ${isEditing ? 'editing-card' : ''} ${duplicateIdSet.has(visit.userId) ? 'duplicate-user-box' : ''}`}
+                            draggable={!isEditing}
+                            style={accentStyle(duplicateIdSet.has(visit.userId) ? '#dc2626' : '#166534')}
                             onClick={(event) => {
                               event.stopPropagation();
                               onOpenUserEditor(visit.userId);
+                            }}
+                            onDragStart={(e) => {
+                              if (isEditing) return;
+                              e.stopPropagation();
+                              e.dataTransfer.effectAllowed = 'move';
+                              e.dataTransfer.setData('text/plain', `scheduled:${visit.slotId}`);
+                              onDragStartScheduled(visit.slotId);
                             }}
                           >
                             <div className="calendar-item-body">
                               <div className="calendar-item-title">【FIX】 {visit.userName}</div>
                               {renderDuplicateBadge(visit.userId)}
                               <div className="calendar-item-sub">{visit.address || visit.area}</div>
-                              <div className="calendar-item-meta">{visit.start} - {visit.end} / 担当: {visit.nurseName || visit.preferredNurseName || '未割当'}</div>
+                              <div className="calendar-item-meta">{visit.start} - {visit.end} / 担当: {visit.nurseName || '未設定'}</div>
                               {isEditing && (
                                 <div className="time-edit-panel dark-panel" onClick={(event) => event.stopPropagation()}>
                                   <div className="time-edit-current">現在: {visit.start} - {visit.end}</div>
@@ -428,7 +430,7 @@ export function CalendarView({
                                     </label>
                                   </div>
                                   <div className="time-edit-actions">
-                                    <button className="small-action light-action" onClick={saveScheduledEdit}>保存</button>
+                                    <button className="small-action light-action" onClick={() => { onUpdateScheduledTime(visit.slotId, editStart, editEnd); cancelEdit(); }}>保存</button>
                                     <button className="small-action light-action" onClick={cancelEdit}>戻る</button>
                                   </div>
                                 </div>

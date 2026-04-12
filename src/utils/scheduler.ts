@@ -1,5 +1,7 @@
 import { CandidateVisit, ConflictWarning, Nurse, RouteSuggestion, ScheduledVisit } from '../types';
-import { AREA_COORDS, extractAreaName, timeToMinutes } from './calendar';
+import { AREA_COORDS, extractAreaName, minutesToTime, timeToMinutes } from './calendar';
+
+const TRAVEL_BUFFER_MINUTES = 15;
 
 function visitShift(visit: CandidateVisit | ScheduledVisit): '午前' | '午後' {
   return visit.startMinutes < 12 * 60 ? '午前' : '午後';
@@ -17,27 +19,52 @@ function withinRange(range: string, visit: CandidateVisit | ScheduledVisit): boo
   return visit.startMinutes >= startMinutes && visit.endMinutes <= endMinutes;
 }
 
-function nurseAvailableOnDate(nurse: Nurse, visit: CandidateVisit): boolean {
+function normalizeRange(raw: string): { start: string; end: string; startMinutes: number; endMinutes: number } | null {
+  const [start, end] = raw.split('-').map((value) => value.trim());
+  if (!start || !end) return null;
+  const startMinutes = timeToMinutes(start);
+  const endMinutes = timeToMinutes(end);
+  if (Number.isNaN(startMinutes) || Number.isNaN(endMinutes) || startMinutes >= endMinutes) return null;
+  return { start, end, startMinutes, endMinutes };
+}
+
+function resolveNurseAvailabilityRanges(nurse: Nurse, visit: CandidateVisit): Array<{ start: string; end: string; startMinutes: number; endMinutes: number }> {
   const explicit = nurse.monthlyShiftDetails?.[visit.dateKey];
   if (explicit) {
-    const availableEntries = explicit.filter((entry) => !entry.deleted);
-    if (!availableEntries.length) return false;
-    return availableEntries.some((entry) => visit.startMinutes >= entry.startMinutes && visit.endMinutes <= entry.endMinutes);
+    return explicit
+      .filter((entry) => !entry.deleted)
+      .map((entry) => ({ start: entry.start, end: entry.end, startMinutes: entry.startMinutes, endMinutes: entry.endMinutes }))
+      .filter((entry) => entry.startMinutes < entry.endMinutes)
+      .sort((a, b) => a.startMinutes - b.startMinutes);
   }
 
-  const dayKey = `${new Date(visit.dateKey).getDate()}日`;
+  const dayKey = `${new Date(`${visit.dateKey}T00:00:00`).getDate()}日`;
   const monthlyAvailability = nurse.monthlyAvailability ?? {};
   const hasMonthlyRules = Object.keys(monthlyAvailability).length > 0;
   const targetMonth = nurse.monthlyAvailabilityMonth?.trim();
   const visitMonth = visit.dateKey.slice(0, 7);
 
   if (hasMonthlyRules && (!targetMonth || targetMonth === visitMonth)) {
-    const range = monthlyAvailability[dayKey];
-    if (!range) return false;
-    return range.split('|').some((item) => withinRange(item.trim(), visit));
+    return String(monthlyAvailability[dayKey] || '')
+      .split('|')
+      .map((item) => normalizeRange(item.trim()))
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+      .sort((a, b) => a.startMinutes - b.startMinutes);
   }
 
-  return true;
+  if (!nurse.workingWeekdays.includes(visit.weekday)) return [];
+  const fallbackRanges: string[] = [];
+  if (nurse.shiftAvailability.午前) fallbackRanges.push('09:00-12:00');
+  if (nurse.shiftAvailability.午後) fallbackRanges.push('13:00-18:00');
+  return fallbackRanges
+    .map((item) => normalizeRange(item))
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+}
+
+function nurseAvailableOnDate(nurse: Nurse, visit: CandidateVisit): boolean {
+  const ranges = resolveNurseAvailabilityRanges(nurse, visit);
+  if (!ranges.length) return false;
+  return ranges.some((entry) => withinRange(`${entry.start}-${entry.end}`, visit));
 }
 
 function haversineKm(aArea: string, bArea: string): number {
@@ -54,29 +81,88 @@ function haversineKm(aArea: string, bArea: string): number {
   return 2 * earthRadiusKm * Math.asin(Math.sqrt(h));
 }
 
+function placementConflicts(startMinutes: number, endMinutes: number, scheduledVisits: ScheduledVisit[]): boolean {
+  return scheduledVisits.some((item) => startMinutes < item.endMinutes + TRAVEL_BUFFER_MINUTES && item.startMinutes - TRAVEL_BUFFER_MINUTES < endMinutes);
+}
+
+function placeVisitWithinWindow(
+  visit: CandidateVisit,
+  nurse: Nurse,
+  scheduledVisits: ScheduledVisit[]
+): CandidateVisit | null {
+  const sameDayVisits = scheduledVisits
+    .filter((item) => item.nurseId === nurse.id && item.dateKey === visit.dateKey)
+    .sort((a, b) => a.startMinutes - b.startMinutes);
+  if (sameDayVisits.length >= nurse.maxVisitsPerDay) return null;
+
+  const duration = Math.max(15, visit.serviceDurationMinutes || visit.endMinutes - visit.startMinutes || 30);
+  const windowStartMinutes = visit.windowStartMinutes ?? visit.startMinutes;
+  const windowEndMinutes = visit.windowEndMinutes ?? visit.endMinutes;
+  const ranges = resolveNurseAvailabilityRanges(nurse, visit);
+  if (!ranges.length) return null;
+
+  let bestVisit: CandidateVisit | null = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  ranges.forEach((range) => {
+    const earliestStart = Math.max(windowStartMinutes, range.startMinutes);
+    const latestStart = Math.min(windowEndMinutes - duration, range.endMinutes - duration);
+    if (latestStart < earliestStart) return;
+
+    for (let candidateStart = earliestStart; candidateStart <= latestStart; candidateStart += 15) {
+      const candidateEnd = candidateStart + duration;
+      if (placementConflicts(candidateStart, candidateEnd, sameDayVisits)) continue;
+
+      const previousVisit = [...sameDayVisits]
+        .filter((item) => item.endMinutes <= candidateStart)
+        .sort((a, b) => b.endMinutes - a.endMinutes)[0];
+      const nextVisit = [...sameDayVisits]
+        .filter((item) => item.startMinutes >= candidateEnd)
+        .sort((a, b) => a.startMinutes - b.startMinutes)[0];
+
+      const previousGap = previousVisit ? candidateStart - previousVisit.endMinutes : 45;
+      const nextGap = nextVisit ? nextVisit.startMinutes - candidateEnd : 45;
+      const sameAddressBonus = sameDayVisits.some((item) => item.address === visit.address) ? 30 : 0;
+      const sameAreaBonus = sameDayVisits.filter((item) => item.area === visit.area).length * 12;
+      const windowCenter = (windowStartMinutes + windowEndMinutes) / 2;
+      const centerDistancePenalty = Math.abs(candidateStart + duration / 2 - windowCenter) / 10;
+      const adjacencyBonus = Math.max(0, 24 - Math.min(previousGap, nextGap));
+      const score = sameAddressBonus + sameAreaBonus + adjacencyBonus - centerDistancePenalty - candidateStart / 10000;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestVisit = {
+          ...visit,
+          start: minutesToTime(candidateStart),
+          end: minutesToTime(candidateEnd),
+          startMinutes: candidateStart,
+          endMinutes: candidateEnd,
+          serviceDurationMinutes: duration
+        };
+      }
+    }
+  });
+
+  return bestVisit;
+}
+
 export function autoAssignNurse(
   visit: CandidateVisit,
   nurses: Nurse[],
   scheduledVisits: ScheduledVisit[]
-): { nurse: Nurse | null; score: number } {
-  const candidates = nurses.filter((nurse) => {
-    if (!nurse.active) return false;
-    if (visit.genderPreference !== '希望なし' && nurse.gender !== visit.genderPreference) return false;
-    if (!nurse.workingWeekdays.includes(visit.weekday)) return false;
+): { nurse: Nurse | null; score: number; placedVisit: CandidateVisit | null; reason?: string } {
+  const candidates = nurses.flatMap((nurse) => {
+    if (!nurse.active) return [];
+    if (visit.genderPreference !== '希望なし' && nurse.gender !== visit.genderPreference) return [];
+    if (!nurse.workingWeekdays.includes(visit.weekday)) return [];
     const shift = visitShift(visit);
-    if (!nurse.shiftAvailability[shift]) return false;
-    if (!visit.requiredSkills.every((skill) => nurse.skills.includes(skill) || nurse.skills.includes('基本看護'))) return false;
-    if (!nurseAvailableOnDate(nurse, visit)) return false;
+    if (!nurse.shiftAvailability[shift]) return [];
+    if (!visit.requiredSkills.every((skill) => nurse.skills.includes(skill) || nurse.skills.includes('基本看護'))) return [];
+    if (!nurseAvailableOnDate(nurse, visit)) return [];
 
-    const sameDayVisits = scheduledVisits.filter((item) => item.nurseId === nurse.id && item.dateKey === visit.dateKey);
-    if (sameDayVisits.length >= nurse.maxVisitsPerDay) return false;
-    if (sameDayVisits.some((item) => overlaps(item, visit))) return false;
-    return true;
-  });
+    const placedVisit = placeVisitWithinWindow(visit, nurse, scheduledVisits);
+    if (!placedVisit) return [];
 
-  if (!candidates.length) return { nurse: null, score: 0 };
-
-  const scored = candidates.map((nurse) => {
     const sameDayVisits = scheduledVisits.filter((item) => item.nurseId === nurse.id && item.dateKey === visit.dateKey);
     const sameAreaCount = sameDayVisits.filter((item) => item.area === visit.area).length;
     const areaMatch = nurse.areas.includes(visit.area) ? 24 : 0;
@@ -89,9 +175,19 @@ export function autoAssignNurse(
     const distanceScore = Math.max(0, 30 - nearestDistance * 3);
     const preferredNurseBonus = visit.preferredNurseId === nurse.id || (visit.preferredNurseName && visit.preferredNurseName === nurse.name) ? 120 : 0;
     const score = 100 + preferredNurseBonus + areaMatch + skillScore + employmentScore + sameAreaCount * 10 + distanceScore - loadPenalty;
-    return { nurse, score };
-  }).sort((a, b) => b.score - a.score || a.nurse.name.localeCompare(b.nurse.name, 'ja'));
+    return [{ nurse, score, placedVisit }];
+  });
 
+  if (!candidates.length) {
+    return {
+      nurse: null,
+      score: 0,
+      placedVisit: null,
+      reason: '訪問希望日時の条件が合いません。時間帯・担当看護師・勤務シフトを確認してください。'
+    };
+  }
+
+  const scored = candidates.sort((a, b) => b.score - a.score || a.placedVisit.startMinutes - b.placedVisit.startMinutes || a.nurse.name.localeCompare(b.nurse.name, 'ja'));
   return scored[0];
 }
 

@@ -244,39 +244,11 @@ function loadPersistedDate(): Date {
   return Number.isNaN(parsed.getTime()) ? new Date(START_YEAR, START_MONTH, today.getDate()) : parsed;
 }
 
-function resolveMovedVisit(visit: CandidateVisit, targetDateKey: string, nurses: Nurse[]): CandidateVisit {
-  const workerAvailability = buildWorkerAvailabilityForDate(nurses, targetDateKey);
-  const duration = visit.endMinutes - visit.startMinutes;
-  const ranges = workerAvailability
-    .map((worker) => ({ start: worker.start, end: worker.end, startMinutes: worker.startMinutes, endMinutes: worker.endMinutes }))
-    .filter((item) => Number.isFinite(item.startMinutes) && Number.isFinite(item.endMinutes))
-    .sort((a, b) => a.startMinutes - b.startMinutes);
-
-  let nextStart = visit.start;
-  let nextEnd = visit.end;
-  let nextStartMinutes = visit.startMinutes;
-  let nextEndMinutes = visit.endMinutes;
-
-  const fitsExisting = ranges.some((range) => visit.startMinutes >= range.startMinutes && visit.endMinutes <= range.endMinutes);
-  if (!fitsExisting && ranges.length > 0) {
-    const range = ranges[0];
-    nextStartMinutes = range.startMinutes;
-    nextEndMinutes = Math.min(range.endMinutes, range.startMinutes + duration);
-    if (nextEndMinutes <= nextStartMinutes) {
-      nextEndMinutes = range.endMinutes;
-    }
-    nextStart = minutesToTime(nextStartMinutes);
-    nextEnd = minutesToTime(nextEndMinutes);
-  }
-
+function resolveMovedVisit(visit: CandidateVisit, targetDateKey: string): CandidateVisit {
   return {
     ...visit,
     dateKey: targetDateKey,
-    weekday: weekdayFromDateKey(targetDateKey),
-    start: nextStart,
-    end: nextEnd,
-    startMinutes: nextStartMinutes,
-    endMinutes: nextEndMinutes
+    weekday: weekdayFromDateKey(targetDateKey)
   };
 }
 
@@ -487,6 +459,7 @@ export default function App() {
   const [currentDate, setCurrentDate] = useState<Date>(() => Number.isNaN(initialDate.getTime()) ? loadPersistedDate() : initialDate);
   const [draggedSlotId, setDraggedSlotId] = useState('');
   const [draggedWorkerShiftId, setDraggedWorkerShiftId] = useState('');
+  const [draggedScheduledSlotId, setDraggedScheduledSlotId] = useState('');
   const [selectedNurseId, setSelectedNurseId] = useState(() => initialSnapshot?.selectedNurseId ?? loadFromStorage(SELECTED_NURSE_KEY, ''));
   const [routeSuggestion, setRouteSuggestion] = useState<RouteSuggestion | null>(() => initialSnapshot?.routeSuggestion ?? loadFromStorage<RouteSuggestion | null>(ROUTE_SUGGESTION_KEY, null));
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -553,14 +526,14 @@ export default function App() {
     return applyCandidateCustomizations(buildCandidateVisits(users, nextVisibleDays), hiddenCandidateIds, candidateOverrides);
   };
 
-  const confirmCandidateAsFixed = async (slotId: string, targetDateKey?: string) => {
+  const confirmCandidateAsFixed = async (slotId: string, targetDateKey?: string, allowUnassignedFallback = false) => {
     const effectiveCandidateVisits = getEffectiveCandidates();
     const currentVisit = effectiveCandidateVisits.find((item) => item.slotId === slotId);
     if (!currentVisit) {
       throw new Error('候補が見つかりませんでした。');
     }
 
-    const visit = targetDateKey ? resolveMovedVisit(currentVisit, targetDateKey, nurses) : currentVisit;
+    const visit = targetDateKey ? resolveMovedVisit(currentVisit, targetDateKey) : currentVisit;
     if (targetDateKey) {
       setCandidateOverrides((prev) => ({
         ...prev,
@@ -577,9 +550,13 @@ export default function App() {
     }
 
     const committedVisits = Object.values(scheduledMap).filter((item) => item.slotId !== slotId);
-    const { nurse, score } = autoAssignNurse(visit, nurses, committedVisits);
+    const { nurse, score, placedVisit, reason } = autoAssignNurse(visit, nurses, committedVisits);
+    if (!placedVisit && !allowUnassignedFallback) {
+      throw new Error(reason || '訪問希望日時の条件が合いません。');
+    }
+    const baseVisit = placedVisit ?? visit;
     const scheduled: ScheduledVisit = {
-      ...visit,
+      ...baseVisit,
       boxColor: FIXED_BOX_COLOR,
       confirmedAt: new Date().toISOString(),
       nurseId: nurse?.id,
@@ -597,6 +574,7 @@ export default function App() {
     setScheduledMap((prev) => ({ ...prev, [slotId]: scheduled }));
     setHiddenCandidateIds((prev) => (prev.includes(slotId) ? prev : [...prev, slotId]));
     setDraggedSlotId('');
+    setDraggedScheduledSlotId('');
     setRouteSuggestion(null);
     refreshUi();
     return { scheduled, nurse };
@@ -696,10 +674,10 @@ export default function App() {
     const assigned: ScheduledVisit[] = [...preservedFixedVisits];
 
     remainingCandidates.forEach((visit) => {
-      const { nurse, score } = autoAssignNurse(visit, sourceNurses, assigned);
-      if (!nurse) return;
+      const { nurse, score, placedVisit } = autoAssignNurse(visit, sourceNurses, assigned);
+      if (!nurse || !placedVisit) return;
       assigned.push({
-        ...visit,
+        ...placedVisit,
         confirmedAt: new Date().toISOString(),
         nurseId: nurse.id,
         nurseName: nurse.name,
@@ -793,7 +771,7 @@ export default function App() {
     const effectiveCandidateVisits = applyCandidateCustomizations(buildCandidateVisits(users, visibleDays), hiddenCandidateIds, candidateOverrides);
     const visit = effectiveCandidateVisits.find((item) => item.slotId === slotId);
     if (!visit) return;
-    const movedVisit = resolveMovedVisit(visit, targetDateKey, nurses);
+    const movedVisit = resolveMovedVisit(visit, targetDateKey);
     setCandidateOverrides((prev) => ({
       ...prev,
       [slotId]: {
@@ -814,7 +792,7 @@ export default function App() {
   const handleConfirmCandidate = async (slotId: string) => {
     try {
       const { nurse } = await confirmCandidateAsFixed(slotId);
-      showToast(nurse ? `候補をFIX確定しました（${nurse.name}）` : '候補をFIX確定しました（未割当）');
+      showToast(nurse ? `候補をFIX確定しました（${nurse.name}）` : '候補をFIX確定しました');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '候補の確定に失敗しました。', 'error');
     }
@@ -824,11 +802,63 @@ export default function App() {
     const slotId = droppedSlotId || draggedSlotId;
     if (!slotId) return;
     try {
-      const { nurse } = await confirmCandidateAsFixed(slotId, targetDateKey);
-      showToast(nurse ? `候補をFIXへ移動しました（${nurse.name}）` : '候補をFIXへ移動しました（未割当）');
+      const { nurse } = await confirmCandidateAsFixed(slotId, targetDateKey, true);
+      showToast(nurse ? `候補をFIXへ移動しました（${nurse.name}）` : '候補をFIXへ移動しました（担当未設定）');
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'FIXへの移動に失敗しました。', 'error');
     }
+  };
+
+  const handleMoveScheduled = async (targetDateKey: string, droppedSlotId?: string) => {
+    const slotId = droppedSlotId || draggedScheduledSlotId;
+    if (!slotId) return;
+    const visit = scheduledMap[slotId];
+    if (!visit) {
+      showToast('FIX利用者BOXが見つかりませんでした。', 'error');
+      return;
+    }
+
+    const movedVisit: ScheduledVisit = {
+      ...visit,
+      dateKey: targetDateKey,
+      weekday: weekdayFromDateKey(targetDateKey),
+      manuallyEdited: true
+    };
+
+    const crossBusinessConflict = findCrossBusinessNameConflict(movedVisit, otherBusinessEntries);
+    if (crossBusinessConflict) {
+      showToast(crossBusinessConflict, 'error');
+      return;
+    }
+
+    await scheduleRepo.upsert(movedVisit);
+    setScheduledMap((prev) => ({ ...prev, [slotId]: movedVisit }));
+    setDraggedScheduledSlotId('');
+    setRouteSuggestion(null);
+    refreshUi();
+
+    if (visit.nurseId) {
+      const validation = autoAssignNurse(
+        {
+          ...movedVisit,
+          preferredNurseId: visit.nurseId,
+          preferredNurseName: visit.nurseName || visit.preferredNurseName || '',
+          windowStart: visit.windowStart || visit.start,
+          windowEnd: visit.windowEnd || visit.end,
+          windowStartMinutes: visit.windowStartMinutes ?? visit.startMinutes,
+          windowEndMinutes: visit.windowEndMinutes ?? visit.endMinutes,
+          serviceDurationMinutes: visit.serviceDurationMinutes || Math.max(15, visit.endMinutes - visit.startMinutes)
+        },
+        nurses.filter((nurse) => nurse.id === visit.nurseId),
+        Object.values(scheduledMap).filter((item) => item.slotId !== slotId)
+      );
+      if (!validation.nurse) {
+        showToast('訪問希望日時の条件が合いません。FIXは移動しましたが、担当や時間の再確認が必要です。', 'error');
+        return;
+      }
+    }
+
+    showToast('FIX利用者BOXを移動しました');
   };
 
   const handleUpdateCandidateTime = (slotId: string, start: string, end: string) => {
@@ -1540,10 +1570,7 @@ export default function App() {
   const filteredCandidates = useMemo(() => applyFilters(effectiveCandidateVisits, filters), [effectiveCandidateVisits, filters]);
   const unscheduledCandidates = useMemo(() => getUnscheduledCandidates(filteredCandidates, scheduledMap), [filteredCandidates, scheduledMap]);
   const candidatesByDate = useMemo(() => groupByDate(unscheduledCandidates), [unscheduledCandidates]);
-  const visibleScheduledVisits = useMemo(
-    () => selectedNurseId ? scheduledVisits.filter((visit) => visit.nurseId === selectedNurseId) : scheduledVisits,
-    [scheduledVisits, selectedNurseId]
-  );
+  const visibleScheduledVisits = useMemo(() => scheduledVisits, [scheduledVisits]);
   const scheduledByDate = useMemo(() => groupByDate(visibleScheduledVisits), [visibleScheduledVisits]);
   const allWorkerAvailabilityByDate = useMemo(
     () => visibleDays.reduce<Record<string, WorkerAvailabilityItem[]>>((acc, day) => {
@@ -1669,7 +1696,31 @@ export default function App() {
     }))
     .sort((a, b) => a.name.localeCompare(b.name, 'ja') || a.subtitle.localeCompare(b.subtitle, 'ja')), [users, crossBusinessUserTooltipMap]);
 
-  const duplicateNurseTooltipMap = useMemo(() => nurses.reduce<Record<string, string[]>>((acc, nurse) => {
+  const duplicateNurseNameRows = useMemo(() => Object.entries(nurses.reduce<Record<string, Nurse[]>>((acc, nurse) => {
+    const key = nurse.name.trim();
+    if (!key) return acc;
+    acc[key] ??= [];
+    acc[key].push(nurse);
+    return acc;
+  }, {}))
+    .filter(([, list]) => list.length > 1)
+    .map(([name, list]) => ({
+      name,
+      count: list.length,
+      nurses: list.sort((a, b) => (a.address || a.areas[0] || '').localeCompare(b.address || b.areas[0] || '', 'ja'))
+    }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'ja')), [nurses]);
+
+  const duplicateNurseTooltipMapLocal = useMemo(() => duplicateNurseNameRows.reduce<Record<string, string[]>>((acc, row) => {
+    row.nurses.forEach((nurse) => {
+      acc[nurse.id] = row.nurses
+        .filter((candidate) => candidate.id !== nurse.id)
+        .map((candidate) => `${candidate.name}（${candidate.address || candidate.areas[0] || '住所未設定'}）`);
+    });
+    return acc;
+  }, {}), [duplicateNurseNameRows]);
+
+  const duplicateNurseTooltipMapCross = useMemo(() => nurses.reduce<Record<string, string[]>>((acc, nurse) => {
     const labels = otherBusinessEntries.flatMap((entry) => entry.nurses
       .filter((candidate) => candidate.name.trim() && candidate.name.trim() === nurse.name.trim())
       .map((candidate) => `${candidate.name}（${entry.businessName} / ${candidate.address || candidate.areas[0] || '住所未設定'}）`));
@@ -1677,17 +1728,19 @@ export default function App() {
     return acc;
   }, {}), [nurses, otherBusinessEntries]);
 
+  const duplicateNurseTooltipMap = useMemo(() => mergeTooltipMaps(duplicateNurseTooltipMapLocal, duplicateNurseTooltipMapCross), [duplicateNurseTooltipMapLocal, duplicateNurseTooltipMapCross]);
+
   const duplicateNurseIds = useMemo(() => new Set(Object.keys(duplicateNurseTooltipMap)), [duplicateNurseTooltipMap]);
 
   const crossBusinessNurseAlerts = useMemo(() => nurses
-    .filter((nurse) => (duplicateNurseTooltipMap[nurse.id] ?? []).length > 0)
+    .filter((nurse) => (duplicateNurseTooltipMapCross[nurse.id] ?? []).length > 0)
     .map((nurse) => ({
       id: nurse.id,
       name: nurse.name,
       subtitle: nurse.address || nurse.areas[0] || '住所未設定',
-      labels: duplicateNurseTooltipMap[nurse.id] ?? []
+      labels: duplicateNurseTooltipMapCross[nurse.id] ?? []
     }))
-    .sort((a, b) => a.name.localeCompare(b.name, 'ja') || a.subtitle.localeCompare(b.subtitle, 'ja')), [nurses, duplicateNurseTooltipMap]);
+    .sort((a, b) => a.name.localeCompare(b.name, 'ja') || a.subtitle.localeCompare(b.subtitle, 'ja')), [nurses, duplicateNurseTooltipMapCross]);
 
   const unassignedAlertRows = useMemo(() => Object.entries(candidatesByDate)
     .filter(([, visits]) => visits.length > 0)
@@ -2011,9 +2064,11 @@ export default function App() {
           areaColors={areaColors}
           onDragStart={setDraggedSlotId}
           onDragStartWorkerShift={setDraggedWorkerShiftId}
+          onDragStartScheduled={setDraggedScheduledSlotId}
           onDropCandidate={handleMoveCandidate}
           onDropWorkerShift={(dateKey, shiftId) => { handleMoveWorkerShift(dateKey, shiftId).catch((error) => showToast(error instanceof Error ? error.message : '看護師シフト移動に失敗しました。', 'error')); }}
           onDropCandidateToFixed={(dateKey, slotId) => { handleDropCandidateToFixed(dateKey, slotId).catch((error) => showToast(error instanceof Error ? error.message : 'FIX反映に失敗しました。', 'error')); }}
+          onDropScheduled={(dateKey, slotId) => { handleMoveScheduled(dateKey, slotId).catch((error) => showToast(error instanceof Error ? error.message : 'FIX移動に失敗しました。', 'error')); }}
           onConfirmCandidate={handleConfirmCandidate}
           onRemoveCandidate={handleRemoveCandidate}
           onRemoveScheduled={handleRemoveScheduled}

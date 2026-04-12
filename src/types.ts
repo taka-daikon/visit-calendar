@@ -68,6 +68,11 @@ export interface CandidateVisit extends TimeSlot {
   boxColor?: string;
   preferredNurseId?: string;
   preferredNurseName?: string;
+  windowStart: string;
+  windowEnd: string;
+  windowStartMinutes: number;
+  windowEndMinutes: number;
+  serviceDurationMinutes: number;
 }
 
 export interface ScheduledVisit extends CandidateVisit {
