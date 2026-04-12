@@ -1,5 +1,5 @@
 :root {
-  font-family: Inter, 'Noto Sans JP', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Yu Gothic UI', 'Yu Gothic', 'Meiryo', 'Hiragino Kaku Gothic ProN', sans-serif;
   color: #102a43;
   background:
     radial-gradient(circle at top left, rgba(59, 130, 246, 0.08), transparent 28%),
@@ -16,9 +16,16 @@ body,
   min-height: 100%;
 }
 
+html {
+  font-size: 12px;
+}
+
 body {
   margin: 0;
   background: transparent;
+  font-family: 'Yu Gothic UI', 'Yu Gothic', 'Meiryo', 'Hiragino Kaku Gothic ProN', sans-serif;
+  font-size: 1rem;
+  line-height: 1.15;
 }
 
 button,
@@ -1314,4 +1321,239 @@ button.secondary-accent {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);
+}
+
+
+/* Compact enterprise dashboard theme */
+button,
+input,
+select,
+textarea,
+body,
+.card,
+.panel,
+.calendar-item,
+.stat-card,
+.helper-text,
+.card-subtext {
+  font-size: 1rem;
+  line-height: 1.15;
+}
+
+textarea,
+input,
+select {
+  border-radius: 10px;
+  padding: 0.55rem 0.7rem;
+}
+
+button {
+  border-radius: 10px;
+  padding: 0.5rem 0.8rem;
+}
+
+.helper-text {
+  font-size: 0.92rem;
+  line-height: 1.15;
+}
+
+.app-shell {
+  padding: 12px;
+  gap: 12px;
+}
+
+.card {
+  border-radius: 16px;
+}
+
+.panel,
+.calendar-board-panel,
+.toolbar {
+  padding: 12px;
+}
+
+.toolbar {
+  gap: 10px;
+}
+
+.toolbar-brand-mark {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  font-size: 1rem;
+}
+
+.toolbar h1,
+.login-card h1 {
+  font-size: 1.45rem;
+}
+
+.toolbar-period-sub,
+.calendar-period-chip {
+  font-size: 1rem;
+}
+
+.role-chip,
+.status-chip,
+.badge,
+.legend-chip,
+.alert-count-badge,
+.calendar-period-chip,
+.day-fixed-chip,
+.footer-badge,
+.duplicate-warning-badge {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.92rem;
+}
+
+.stats-grid {
+  gap: 8px;
+}
+
+.stat-card {
+  padding: 10px 12px;
+  gap: 4px;
+  border-radius: 12px;
+}
+
+.stat-card strong {
+  font-size: 1.4rem;
+}
+
+.calendar-panel-header {
+  margin-bottom: 10px;
+  align-items: center;
+}
+
+.calendar-grid {
+  gap: 8px;
+}
+
+.calendar-cell {
+  min-height: 260px;
+  border-radius: 14px;
+  padding: 8px;
+  gap: 8px;
+}
+
+.calendar-cell-header {
+  padding-bottom: 6px;
+}
+
+.calendar-cell-header strong {
+  font-size: 1rem;
+}
+
+.section-title {
+  font-size: 0.88rem;
+  letter-spacing: 0.05em;
+}
+
+.address-group-card {
+  border-radius: 10px;
+  padding: 8px;
+}
+
+.address-group-header {
+  font-size: 0.92rem;
+}
+
+.address-group-list,
+.calendar-section,
+.compact-list {
+  gap: 6px;
+}
+
+.calendar-item,
+.mini-card,
+.visit-card {
+  border-radius: 10px;
+  padding: 8px;
+}
+
+.calendar-item {
+  border-left-width: 5px;
+  font-size: 1rem;
+  gap: 6px;
+}
+
+.calendar-item-body {
+  gap: 2px;
+}
+
+.calendar-item-title {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.calendar-item-sub,
+.calendar-item-meta,
+.card-subtext {
+  font-size: 0.92rem;
+  line-height: 1.1;
+}
+
+.worker-slot {
+  background: linear-gradient(135deg, #eff6ff, #e0f2fe);
+}
+
+.confirmed-zone {
+  border-top: 1px dashed rgba(22, 101, 52, 0.25);
+  padding-top: 8px;
+}
+
+.confirmed-fixed,
+.confirmed-panel-card {
+  background: linear-gradient(135deg, #166534, #14532d);
+  border-color: rgba(20, 83, 45, 0.45);
+  color: #ffffff;
+}
+
+.confirmed-panel-card .card-subtext,
+.confirmed-panel-card label,
+.confirmed-panel-card div,
+.confirmed-fixed .calendar-item-sub,
+.confirmed-fixed .calendar-item-meta {
+  color: rgba(240, 253, 244, 0.98);
+}
+
+.hover-actions button,
+.confirmed-edit,
+.confirmed-remove {
+  width: 24px;
+  height: 24px;
+  font-size: 0.92rem;
+}
+
+.scrollable-list,
+.footer-list {
+  max-height: 320px;
+}
+
+.route-list,
+.warning-list {
+  line-height: 1.2;
+}
+
+.cross-business-alert-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+@media (max-width: 1200px) {
+  .calendar-cell {
+    min-height: 220px;
+  }
+}
+
+@media (max-width: 800px) {
+  .cross-business-alert-grid,
+  .board-summary-grid,
+  .month-grid,
+  .week-grid {
+    grid-template-columns: 1fr;
+  }
 }

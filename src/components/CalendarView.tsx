@@ -5,6 +5,7 @@ interface WorkerAvailabilityItem {
   shiftId: string;
   nurseId: string;
   nurseName: string;
+  nurseAddress: string;
   dateKey: string;
   start: string;
   end: string;
@@ -38,6 +39,8 @@ interface Props {
   onOpenNurseEditor: (nurseId: string, dateKey: string, shiftId: string) => void;
   duplicateUserIds: string[];
   duplicateUserTooltips: Record<string, string[]>;
+  duplicateNurseIds: string[];
+  duplicateNurseTooltips: Record<string, string[]>;
   viewMode: ViewMode;
   periodLabel: string;
   selectedNurseName: string;
@@ -69,6 +72,11 @@ function accentStyle(color?: string) {
   };
 }
 
+function compactAddress(address?: string): string {
+  const value = (address || '').trim();
+  return value || '住所未設定';
+}
+
 export function CalendarView({
   days,
   candidatesByDate,
@@ -93,6 +101,8 @@ export function CalendarView({
   onOpenNurseEditor,
   duplicateUserIds,
   duplicateUserTooltips,
+  duplicateNurseIds,
+  duplicateNurseTooltips,
   viewMode,
   periodLabel,
   selectedNurseName
@@ -103,6 +113,7 @@ export function CalendarView({
   const [editingWorkerId, setEditingWorkerId] = useState('');
   const [editStart, setEditStart] = useState('');
   const duplicateIdSet = useMemo(() => new Set(duplicateUserIds), [duplicateUserIds]);
+  const duplicateNurseIdSet = useMemo(() => new Set(duplicateNurseIds), [duplicateNurseIds]);
   const [editEnd, setEditEnd] = useState('');
 
   const candidateGroupsByDate = useMemo(() => Object.fromEntries(
@@ -182,8 +193,7 @@ export function CalendarView({
     <section className="card panel calendar-board-panel">
       <header className="calendar-panel-header whiteboard-header">
         <div>
-          <h2>ホワイトボードスケジュール</h2>
-          <p className="helper-text">空きセルをクリックすると新規利用者登録、利用者BOXをクリックすると利用者編集、看護師BOXをクリックすると看護師編集ができます。表示中: {selectedNurseName}</p>
+          <h2>カレンダー</h2>
         </div>
         <div className="calendar-header-right">
           <div className="calendar-period-chip">{periodLabel}</div>
@@ -239,9 +249,10 @@ export function CalendarView({
                   return (
                     <div
                       key={shift.shiftId}
-                      className={`calendar-item worker-slot removable magnet-card ${shift.fixed ? 'worker-fixed' : ''} ${isEditing ? 'editing-card' : ''}`}
+                      className={`calendar-item worker-slot removable magnet-card ${shift.fixed ? 'worker-fixed' : ''} ${isEditing ? 'editing-card' : ''} ${duplicateNurseIdSet.has(shift.nurseId) ? 'duplicate-user-box' : ''}`}
                       draggable={!isEditing}
-                      style={accentStyle('#60a5fa')}
+                      style={accentStyle(duplicateNurseIdSet.has(shift.nurseId) ? '#dc2626' : '#60a5fa')}
+                      title={(duplicateNurseTooltips[shift.nurseId] ?? []).join('\n')}
                       onClick={(event) => {
                         event.stopPropagation();
                         onOpenNurseEditor(shift.nurseId, shift.dateKey, shift.shiftId);
@@ -255,9 +266,9 @@ export function CalendarView({
                       }}
                     >
                       <div className="calendar-item-body">
-                        <div className="calendar-item-title">[{shift.start}-{shift.end}] {shift.nurseName}</div>
-                        <div className="calendar-item-sub">看護師BOXをクリックすると勤務情報を編集できます</div>
-                        <div className="calendar-item-meta">{shift.fixed ? 'FIX済み' : '未FIX'}</div>
+                        <div className="calendar-item-title">{shift.nurseName}</div>
+                        <div className="calendar-item-sub">{compactAddress(shift.nurseAddress)}</div>
+                        <div className="calendar-item-meta">{shift.start} - {shift.end}</div>
                         {isEditing && (
                           <div className={`time-edit-panel ${shift.fixed ? 'dark-panel' : ''}`} onClick={(event) => event.stopPropagation()}>
                             <div className="time-edit-current">現在: {shift.start} - {shift.end}</div>
@@ -322,10 +333,10 @@ export function CalendarView({
                             style={accentStyle(accent)}
                           >
                             <div className="calendar-item-body">
-                              <div className="calendar-item-title">[{visit.start}-{visit.end}] {visit.userName}</div>
+                              <div className="calendar-item-title">{visit.userName}</div>
                               {renderDuplicateBadge(visit.userId)}
                               <div className="calendar-item-sub">{visit.address || visit.area}</div>
-                              <div className="calendar-item-meta">担当希望: {visit.preferredNurseName || '未指定'} / エリア: {visit.area}</div>
+                              <div className="calendar-item-meta">{visit.start} - {visit.end} / 担当希望: {visit.preferredNurseName || '未指定'}</div>
                               {isEditing && (
                                 <div className="time-edit-panel" onClick={(event) => event.stopPropagation()}>
                                   <div className="time-edit-current">現在: {visit.start} - {visit.end}</div>
@@ -376,7 +387,7 @@ export function CalendarView({
                   onDropCandidateToFixed(day.dateKey, payload.replace(/^candidate:/, ''));
                 }}
               >
-                <div className="section-title">FIX済み（ここへドロップで確定）</div>
+                <div className="section-title">FIX BOX</div>
                 {dayScheduledGroups.length === 0 && <div className="empty small">確定なし</div>}
                 {dayScheduledGroups.map((group) => (
                   <div key={`${day.dateKey}-confirmed-${group.address}`} className="address-group-card confirmed-address-group" onClick={(event) => event.stopPropagation()}>
@@ -392,17 +403,17 @@ export function CalendarView({
                           <div
                             key={visit.slotId}
                             className={`calendar-item confirmed confirmed-fixed magnet-card ${isEditing ? 'editing-card' : ''} ${duplicateIdSet.has(visit.userId) ? 'duplicate-user-box' : ''}`}
-                            style={{ ...accentStyle(accent), borderLeftColor: accent }}
+                            style={accentStyle('#166534')}
                             onClick={(event) => {
                               event.stopPropagation();
                               onOpenUserEditor(visit.userId);
                             }}
                           >
                             <div className="calendar-item-body">
-                              <div className="calendar-item-title">【FIX】[{visit.start}-{visit.end}] {visit.userName}</div>
+                              <div className="calendar-item-title">【FIX】 {visit.userName}</div>
                               {renderDuplicateBadge(visit.userId)}
                               <div className="calendar-item-sub">{visit.address || visit.area}</div>
-                              <div className="calendar-item-meta">担当: {visit.nurseName || visit.preferredNurseName || '未割当'} / エリア: {visit.area}</div>
+                              <div className="calendar-item-meta">{visit.start} - {visit.end} / 担当: {visit.nurseName || visit.preferredNurseName || '未割当'}</div>
                               {isEditing && (
                                 <div className="time-edit-panel dark-panel" onClick={(event) => event.stopPropagation()}>
                                   <div className="time-edit-current">現在: {visit.start} - {visit.end}</div>

@@ -92,6 +92,7 @@ export interface NurseShiftEntry extends TimeSlot {
 export interface Nurse {
   id: string;
   name: string;
+  address?: string;
   gender: NurseGender;
   employmentType: EmploymentType;
   active: boolean;
@@ -158,7 +159,7 @@ export interface MonthlyReport {
 }
 
 export interface ConflictWarning {
-  type: 'nurse-overlap' | 'user-duplicate';
+  type: 'nurse-overlap' | 'user-duplicate' | 'cross-business-nurse' | 'cross-business-user';
   dateKey: string;
   message: string;
   slotIds: string[];

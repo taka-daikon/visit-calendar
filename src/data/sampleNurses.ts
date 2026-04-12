@@ -4,6 +4,7 @@ export const sampleNurses: Nurse[] = [
   {
     id: 'nurse-1',
     name: '井上 由美',
+    address: '岡山市北区奥田2-4-18',
     gender: '女性',
     employmentType: '常勤',
     active: true,
@@ -16,6 +17,7 @@ export const sampleNurses: Nurse[] = [
   {
     id: 'nurse-2',
     name: '松本 恒一',
+    address: '岡山市中区浜3-6-12',
     gender: '男性',
     employmentType: '常勤',
     active: true,
@@ -28,6 +30,7 @@ export const sampleNurses: Nurse[] = [
   {
     id: 'nurse-3',
     name: '山田 葵',
+    address: '岡山市東区西大寺上2-8-4',
     gender: '女性',
     employmentType: '非常勤',
     active: true,
@@ -40,6 +43,7 @@ export const sampleNurses: Nurse[] = [
   {
     id: 'nurse-4',
     name: '森田 海斗',
+    address: '倉敷市阿知1-7-2',
     gender: '男性',
     employmentType: '非常勤',
     active: true,
@@ -52,6 +56,7 @@ export const sampleNurses: Nurse[] = [
   {
     id: 'nurse-5',
     name: '小川 真理',
+    address: '玉野市築港1-11-9',
     gender: '女性',
     employmentType: '常勤',
     active: true,

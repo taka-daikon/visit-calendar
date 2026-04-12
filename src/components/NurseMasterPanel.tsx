@@ -11,6 +11,7 @@ interface Props {
 
 const defaultDraft: Omit<Nurse, 'id'> = {
   name: '',
+  address: '',
   gender: '女性',
   employmentType: '常勤',
   active: true,
@@ -35,6 +36,7 @@ export function NurseMasterPanel({ nurses, onToggleActive, onAdd, onImportCsv, o
               <button onClick={() => onToggleActive(nurse.id)}>{nurse.active ? '稼働中' : '停止中'}</button>
             </div>
             <div>{nurse.gender} / {nurse.employmentType} / 上限 {nurse.maxVisitsPerDay}件</div>
+            <div>住所: {nurse.address || '未設定'}</div>
             <div>勤務: {nurse.workingWeekdays.join('・')} / 午前:{nurse.shiftAvailability.午前 ? '可' : '不可'} / 午後:{nurse.shiftAvailability.午後 ? '可' : '不可'}</div>
             <div>スキル: {nurse.skills.join(' / ')}</div>
             <div>エリア: {nurse.areas.join(' / ')}</div>
@@ -46,6 +48,7 @@ export function NurseMasterPanel({ nurses, onToggleActive, onAdd, onImportCsv, o
       </div>
       <div className="field-grid">
         <label>氏名<input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></label>
+        <label>住所<input value={draft.address || ''} onChange={(e) => setDraft({ ...draft, address: e.target.value })} placeholder="岡山市北区奥田1-1-1" /></label>
         <label>性別<select value={draft.gender} onChange={(e) => setDraft({ ...draft, gender: e.target.value as Nurse['gender'] })}><option value="女性">女性</option><option value="男性">男性</option></select></label>
         <label>雇用<select value={draft.employmentType} onChange={(e) => setDraft({ ...draft, employmentType: e.target.value as Nurse['employmentType'] })}><option value="常勤">常勤</option><option value="非常勤">非常勤</option></select></label>
         <label>1日上限<input type="number" min={1} max={12} value={draft.maxVisitsPerDay} onChange={(e) => setDraft({ ...draft, maxVisitsPerDay: Number(e.target.value) })} /></label>

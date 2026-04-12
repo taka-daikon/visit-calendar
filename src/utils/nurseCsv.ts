@@ -12,7 +12,12 @@ const HEADER_ALIASES: Record<string, string> = {
   '雇用': '雇用区分',
   '上限件数': '1日上限件数',
   '稼働': '稼働',
-  '対象月': '対象年月'
+  '対象月': '対象年月',
+  '居住地': '住所',
+  '拠点住所': '住所',
+  '事業所住所': '住所',
+  '自宅住所': '住所',
+  '担当エリア': 'エリア'
 };
 
 function parseCsvLine(line: string): string[] {
@@ -161,6 +166,7 @@ export function parseNurseCsv(text: string): Nurse[] {
     return {
       id: `nurse-${index + 1}`,
       name: record['氏名'] || `看護師${index + 1}`,
+      address: record['住所'] || areas[0] || '',
       gender: normalizeGender(record['性別'] || '女性'),
       employmentType: normalizeEmployment(record['雇用区分'] || '常勤'),
       active: toBool(record['稼働'], true),

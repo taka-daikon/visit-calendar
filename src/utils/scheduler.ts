@@ -1,5 +1,5 @@
 import { CandidateVisit, ConflictWarning, Nurse, RouteSuggestion, ScheduledVisit } from '../types';
-import { AREA_COORDS, timeToMinutes } from './calendar';
+import { AREA_COORDS, extractAreaName, timeToMinutes } from './calendar';
 
 function visitShift(visit: CandidateVisit | ScheduledVisit): '午前' | '午後' {
   return visit.startMinutes < 12 * 60 ? '午前' : '午後';
@@ -85,7 +85,7 @@ export function autoAssignNurse(
     const loadPenalty = sameDayVisits.length * 6;
     const nearestDistance = sameDayVisits.length
       ? Math.min(...sameDayVisits.map((item) => haversineKm(item.area, visit.area)))
-      : haversineKm(nurse.areas[0] ?? visit.area, visit.area);
+      : haversineKm(extractAreaName(nurse.address || nurse.areas[0] || visit.area), visit.area);
     const distanceScore = Math.max(0, 30 - nearestDistance * 3);
     const preferredNurseBonus = visit.preferredNurseId === nurse.id || (visit.preferredNurseName && visit.preferredNurseName === nurse.name) ? 120 : 0;
     const score = 100 + preferredNurseBonus + areaMatch + skillScore + employmentScore + sameAreaCount * 10 + distanceScore - loadPenalty;

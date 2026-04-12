@@ -37,6 +37,7 @@ export function NurseEditorModal({ draft, onChange, onClose, onSave }: Props) {
 
         <div className="field-grid form-grid-2col">
           <label>看護師名<input value={draft.name} onChange={(e) => onChange({ ...draft, name: e.target.value })} /></label>
+          <label>住所<input value={draft.address || ''} onChange={(e) => onChange({ ...draft, address: e.target.value })} placeholder="岡山市北区奥田1-1-1" /></label>
           <label>性別
             <select value={draft.gender} onChange={(e) => onChange({ ...draft, gender: e.target.value as Nurse['gender'] })}>
               <option value="女性">女性</option>
