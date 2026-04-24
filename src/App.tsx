@@ -24,7 +24,7 @@ import { downloadTextFile, loadFromStorage, printHtml, saveToStorage } from './s
 import { createNurseRepo, createScheduleRepo, createUserArchiveRepo, createUserRepo } from './services/repository';
 import { AuthUser, CandidateVisit, ConflictWarning, Filters, Nurse, NurseShiftEntry, RouteSuggestion, ScheduledVisit, SyncState, UserArchiveRecord, UserRecord, ViewMode, WeekdayJa } from './types';
 import { applyFilters, buildCandidateVisits, expandTimeRange, extractAreaName, getAreaColors, getUnscheduledCandidates, groupByDate, minutesToTime, timeToMinutes } from './utils/calendar';
-import { parseCsv } from './utils/csv';
+import { EXCEL_USER_TEMPLATE_HEADERS, parseCsv } from './utils/csv';
 import { START_MONTH, START_YEAR, WEEKDAY_LABELS, addMonths, formatDateKey, formatMonthLabel, getVisibleDays } from './utils/date';
 import { readCsvFileText } from './utils/fileText';
 import { suggestOptimizedRoute } from './utils/mapsRouteService';
@@ -49,27 +49,11 @@ const BUSINESS_STORAGE_KEY = 'visit-calendar-businesses';
 const ACTIVE_BUSINESS_KEY = 'visit-calendar-active-business';
 const BUSINESS_SNAPSHOT_KEY = 'visit-calendar-business-snapshots';
 const SAVED_DRAFTS_KEY = 'visit-calendar-saved-drafts';
+const UI_PAGE_KEY = 'visit-calendar-ui-page';
 
-const USER_CSV_HEADERS: Array<keyof UserRecord | 'カラー' | '担当看護師名'> = [
-  '利用者名',
-  '居住地',
-  '保険区分',
-  '更新サイクル',
-  '希望曜日',
-  '希望性別',
-  '希望処置内容',
-  '月曜希望時間',
-  '火曜希望時間',
-  '水曜希望時間',
-  '木曜希望時間',
-  '金曜希望時間',
-  '土曜希望時間',
-  '日曜希望時間',
-  '前回更新日',
-  '書類期限日',
-  'カラー',
-  '担当看護師名'
-];
+type UiPage = 'optimize' | 'calendar';
+
+const USER_CSV_HEADERS = EXCEL_USER_TEMPLATE_HEADERS;
 
 const USER_COLOR_OPTIONS = ['#60a5fa', '#f59e0b', '#34d399', '#f472b6', '#a78bfa', '#fb7185', '#22c55e', '#06b6d4', '#f97316', '#14b8a6', '#fde047', '#94a3b8'];
 const USER_WEEKDAYS: WeekdayJa[] = ['月曜', '火曜', '水曜', '木曜', '金曜', '土曜', '日曜'];
@@ -107,23 +91,85 @@ function escapeCsvCell(value: unknown): string {
   return text;
 }
 
+function boolText(value: string): string {
+  return /^(true|1|はい|有|希望|yes|ok)$/i.test(String(value || '').trim()) ? 'TRUE' : '';
+}
+
+function resolveCommonVisitTime(record: UserRecord, hopeDays: WeekdayJa[]): string {
+  const existing = String(record.訪問希望時間帯 || '').trim();
+  if (existing) return existing;
+  return hopeDays.map((day) => String(record[USER_TIME_FIELD_MAP[day]] || '').trim()).find(Boolean) || '';
+}
+
 function normalizeUserRecord(record: UserRecord): UserRecord {
-  const hopeDays = splitHopeDays(record.希望曜日 || '').filter((item, index, list) => list.indexOf(item) === index);
+  const hopeDays = splitHopeDays(record.訪問希望曜日 || record.希望曜日 || '').filter((item, index, list) => list.indexOf(item) === index);
   const color = record.boxColor || record.カラー || USER_COLOR_OPTIONS[0];
   const preferredNurseName = record.preferredNurseName || record.担当看護師名 || '';
-  return {
+  const address = record.住所 || record.居住地 || '';
+  const treatment = record.希望ケア || record.希望処置内容 || '基本看護';
+  const commonVisitTime = resolveCommonVisitTime(record, hopeDays);
+  const nextRecord: UserRecord = {
     ...record,
+    居住地: address,
+    住所: address,
+    保険区分: record.保険区分,
+    保険対象: record.保険対象 || record.保険区分,
     希望曜日: hopeDays.join('|'),
+    訪問希望曜日: record.訪問希望曜日 || hopeDays.join('|'),
+    希望性別: record.希望性別,
+    女性希望: record.希望性別 === '女性' ? '希望' : '',
+    希望処置内容: treatment,
+    希望ケア: treatment,
+    訪問希望時間帯: commonVisitTime,
     hopeDays,
     カラー: color,
     boxColor: color,
     preferredNurseName,
-    担当看護師名: preferredNurseName
+    担当看護師名: preferredNurseName,
+    前回更新日: record.利用者確認日 || record.前回更新日 || '',
+    利用者確認日: record.利用者確認日 || record.前回更新日 || '',
+    更新日: record.更新日 || '',
+    入力日: record.入力日 || '',
+    確定の有無: boolText(record.確定の有無 || '')
   };
+
+  hopeDays.forEach((day) => {
+    const field = USER_TIME_FIELD_MAP[day];
+    if (!String(nextRecord[field] || '').trim() && commonVisitTime) {
+      ((nextRecord as unknown) as Record<string, string | undefined>)[field] = commonVisitTime;
+    }
+  });
+
+  return nextRecord;
 }
 
 function serializeUsersToCsv(records: UserRecord[]): string {
-  const lines = records.map((record) => USER_CSV_HEADERS.map((header) => escapeCsvCell(record[header] ?? '')).join(','));
+  const lines = records.map((source) => {
+    const record = normalizeUserRecord(source);
+    const rowMap: Record<(typeof USER_CSV_HEADERS)[number], string> = {
+      入力者: record.入力者 || '',
+      利用者名: record.利用者名 || '',
+      利用者ID: record.利用者ID || record.id || '',
+      かな: record.かな || '',
+      施設名: record.施設名 || '',
+      住所: record.住所 || record.居住地 || '',
+      保険対象: record.保険対象 || record.保険区分 || '',
+      訪問NG日付: record.訪問NG日付 || '',
+      訪問NG開始時間: record.訪問NG開始時間 || '',
+      訪問NG終了時間: record.訪問NG終了時間 || '',
+      訪問希望曜日: record.訪問希望曜日 || record.希望曜日 || '',
+      訪問希望時間帯: record.訪問希望時間帯 || resolveCommonVisitTime(record, record.hopeDays || []),
+      女性希望: record.女性希望 || (record.希望性別 === '女性' ? '希望' : ''),
+      希望ケア: record.希望ケア || record.希望処置内容 || '',
+      その他要望: record.その他要望 || '',
+      入力日: record.入力日 || '',
+      更新日: record.更新日 || '',
+      利用者確認日: record.利用者確認日 || record.前回更新日 || '',
+      '確定の有無': boolText(record.確定の有無 || ''),
+      過去履歴訪問NG: record.過去履歴訪問NG || ''
+    };
+    return USER_CSV_HEADERS.map((header) => escapeCsvCell(rowMap[header] || '')).join(',');
+  });
   return [USER_CSV_HEADERS.join(','), ...lines].join('\n');
 }
 
@@ -134,11 +180,16 @@ function buildUserDraftForDate(dateKey: string): UserRecord {
     id: crypto.randomUUID(),
     利用者名: '',
     居住地: '',
+    住所: '',
     保険区分: '医療保険',
+    保険対象: '医療保険',
     更新サイクル: '1ヶ月',
     希望曜日: weekday,
+    訪問希望曜日: weekday,
     希望性別: '希望なし',
+    女性希望: '',
     希望処置内容: '基本看護',
+    希望ケア: '基本看護',
     月曜希望時間: '',
     火曜希望時間: '',
     水曜希望時間: '',
@@ -147,7 +198,21 @@ function buildUserDraftForDate(dateKey: string): UserRecord {
     土曜希望時間: '',
     日曜希望時間: '',
     前回更新日: '',
+    利用者確認日: '',
     書類期限日: '',
+    訪問NG日付: '',
+    訪問NG開始時間: '',
+    訪問NG終了時間: '',
+    訪問希望時間帯: '09:00-10:00',
+    入力者: '',
+    利用者ID: '',
+    かな: '',
+    施設名: '',
+    その他要望: '',
+    入力日: '',
+    更新日: '',
+    確定の有無: '',
+    過去履歴訪問NG: '',
     カラー: USER_COLOR_OPTIONS[0],
     担当看護師名: '',
     boxColor: USER_COLOR_OPTIONS[0],
@@ -456,6 +521,7 @@ export default function App() {
   const [candidateOverrides, setCandidateOverrides] = useState<CandidateOverrideMap>(() => initialSnapshot?.candidateOverrides ?? loadFromStorage(MOVED_CANDIDATE_KEY, {}));
   const [filters, setFilters] = useState<Filters>(() => initialSnapshot?.filters ?? loadFromStorage(FILTERS_KEY, defaultFilters));
   const [viewMode, setViewMode] = useState<ViewMode>(() => initialSnapshot?.viewMode ?? loadFromStorage(VIEW_MODE_KEY, 'month'));
+  const [uiPage, setUiPage] = useState<UiPage>(() => loadFromStorage<UiPage>(UI_PAGE_KEY, 'optimize'));
   const [currentDate, setCurrentDate] = useState<Date>(() => Number.isNaN(initialDate.getTime()) ? loadPersistedDate() : initialDate);
   const [draggedSlotId, setDraggedSlotId] = useState('');
   const [draggedWorkerShiftId, setDraggedWorkerShiftId] = useState('');
@@ -1303,6 +1369,16 @@ export default function App() {
     downloadTextFile(`monthly-report-${currentDate.getFullYear()}-${currentDate.getMonth() + 1}.csv`, monthlyReportToCsv(report), 'text/csv;charset=utf-8');
   };
 
+  const handleDownloadUserTemplateCsv = () => {
+    downloadTextFile('assessment-user-template.csv', `${USER_CSV_HEADERS.join(',')}\n`, 'text/csv;charset=utf-8');
+    showToast('Excelヘッダー対応の空テンプレートCSVを出力しました');
+  };
+
+  const handleDownloadCurrentUsersCsv = () => {
+    downloadTextFile('assessment-users-export.csv', serializeUsersToCsv(users), 'text/csv;charset=utf-8');
+    showToast('現在の利用者データをExcelヘッダー形式で出力しました');
+  };
+
   const handleExportPdf = () => {
     printHtml('月次レポート', `
       <h1>${formatMonthLabel(currentDate)} 月次レポート</h1>
@@ -1477,6 +1553,7 @@ export default function App() {
   useEffect(() => saveToStorage(MOVED_CANDIDATE_KEY, candidateOverrides), [candidateOverrides]);
   useEffect(() => saveToStorage(FILTERS_KEY, filters), [filters]);
   useEffect(() => saveToStorage(VIEW_MODE_KEY, viewMode), [viewMode]);
+  useEffect(() => saveToStorage(UI_PAGE_KEY, uiPage), [uiPage]);
   useEffect(() => saveToStorage(CURRENT_DATE_KEY, currentDate.toISOString()), [currentDate]);
   useEffect(() => saveToStorage(SELECTED_NURSE_KEY, selectedNurseId), [selectedNurseId]);
   useEffect(() => saveToStorage(CSV_DRAFT_KEY, csvText), [csvText]);
@@ -1799,6 +1876,17 @@ export default function App() {
         onToggleMenu={() => setMenuOpen((prev) => !prev)}
       />
 
+      <section className="card panel page-switch-panel">
+        <div>
+          <h2>作業ページ</h2>
+          <p className="helper-text">CSV読込と最適化準備は「最適化ページ」、ドラッグ＆ドロップ調整は「カレンダーページ」に分けました。</p>
+        </div>
+        <div className="page-switch-tabs" role="tablist" aria-label="作業ページ切替">
+          <button type="button" className={`page-switch-tab ${uiPage === 'optimize' ? 'active' : ''}`} onClick={() => setUiPage('optimize')}>最適化ページ</button>
+          <button type="button" className={`page-switch-tab ${uiPage === 'calendar' ? 'active' : ''}`} onClick={() => setUiPage('calendar')}>カレンダーページ</button>
+        </div>
+      </section>
+
       {menuOpen && (
         <section className="hamburger-drawer card panel">
           <div className="drawer-header split-line">
@@ -1919,6 +2007,64 @@ export default function App() {
         />
       </section>
 
+      {uiPage === 'optimize' && (
+        <>
+          <section className="optimize-hero-grid">
+            <article className="card panel optimize-panel">
+              <div className="split-line optimize-panel-header">
+                <div>
+                  <h2>利用者CSV読込と最適化</h2>
+                  <p className="helper-text">添付Excelの1行目を基準にしたCSVをここで読み込みます。読み込み後は自動割当が実行され、未割当や重複は下の要約で確認できます。</p>
+                </div>
+                <span className="badge footer-badge">{users.length}名読込中</span>
+              </div>
+              <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} rows={14} placeholder={USER_CSV_HEADERS.join(',')} />
+              <div className="toolbar-actions left csv-actions-wrap">
+                <button className="primary" onClick={() => applyCsvText(csvText).catch((error) => showToast(error instanceof Error ? error.message : '利用者CSVの反映に失敗しました。', 'error'))}>利用者CSV反映</button>
+                <input type="file" accept=".csv,text/csv" onChange={handleCsvFile} />
+                <button onClick={handleClearUsersCsv}>利用者CSV削除</button>
+              </div>
+              <div className="toolbar-actions left csv-actions-wrap nurse-csv-row">
+                <input type="file" accept=".csv,text/csv" onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (!file) return;
+                  handleNurseCsvFile(file).catch((error) => showToast(error instanceof Error ? error.message : 'ワーカーCSVの反映に失敗しました。', 'error'));
+                  event.currentTarget.value = '';
+                }} />
+                <button onClick={handleClearNurseCsv}>看護師CSV削除</button>
+                <button onClick={handleDownloadUserTemplateCsv}>空テンプレートCSV</button>
+                <button onClick={handleDownloadCurrentUsersCsv}>現在データをExcel形式で出力</button>
+              </div>
+            </article>
+
+            <article className="card panel optimize-panel optimize-guide-panel">
+              <h2>Excel 1行目の対応項目</h2>
+              <p className="helper-text">今後はこの見出し順でCSV化すると、そのまま最適化に使えます。訪問希望曜日・訪問希望時間帯・訪問NG日付を優先して候補生成します。</p>
+              <div className="header-chip-grid">
+                {USER_CSV_HEADERS.map((header) => <span key={header} className="header-chip">{header}</span>)}
+              </div>
+              <ul className="warning-list optimize-note-list">
+                <li>「住所」はカレンダー上の住所・エリア判定に使用</li>
+                <li>「訪問希望曜日」「訪問希望時間帯」は30分訪問の候補生成に使用</li>
+                <li>「訪問NG日付」「訪問NG開始時間」「訪問NG終了時間」は候補除外に使用</li>
+                <li>「希望ケア」「女性希望」は担当看護師の自動割当スコアに反映</li>
+              </ul>
+            </article>
+          </section>
+
+          <section className="stats-grid board-summary-grid optimize-summary-grid">
+            <article className="stat-card"><span>利用者数</span><strong>{users.length}</strong></article>
+            <article className="stat-card"><span>未割当候補</span><strong>{unscheduledCandidates.length}</strong></article>
+            <article className="stat-card"><span>FIX訪問</span><strong>{scheduledVisits.length}</strong></article>
+            <article className="stat-card"><span>看護師数</span><strong>{nurses.length}</strong></article>
+            <article className="stat-card"><span>利用者名重複</span><strong>{duplicateUserNameRows.length}</strong></article>
+            <article className="stat-card"><span>看護師名重複</span><strong>{duplicateNurseNameRows.length}</strong></article>
+          </section>
+        </>
+      )}
+
+      {uiPage === 'calendar' && (
+        <>
       <section className="scheduler-top-row">
         <section className="stats-grid board-summary-grid">
           <article className="stat-card"><span>利用者数</span><strong>{users.length}</strong></article>
@@ -2095,27 +2241,7 @@ export default function App() {
         <CandidateList visits={unscheduledCandidates} areaColors={areaColors} onDragStart={setDraggedSlotId} duplicateUserIds={[...duplicateUserIdsAll]} duplicateUserTooltips={duplicateUserTooltipMapAll} />
       )}
 
-      <section className="scheduler-footer-grid">
-        <section className="card panel csv-panel footer-panel">
-          <h2>CSV取込</h2>
-          <p className="helper-text">利用者CSVと看護師CSV、初期登録や更新作業はフッターへ集約しました。</p>
-          <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} rows={8} />
-          <div className="toolbar-actions left csv-actions-wrap">
-            <button className="primary" onClick={() => applyCsvText(csvText).catch((error) => showToast(error instanceof Error ? error.message : '利用者CSVの反映に失敗しました。', 'error'))}>利用者CSV反映</button>
-            <input type="file" accept=".csv,text/csv" onChange={handleCsvFile} />
-            <button onClick={handleClearUsersCsv}>利用者CSV削除</button>
-          </div>
-          <div className="toolbar-actions left csv-actions-wrap nurse-csv-row">
-            <input type="file" accept=".csv,text/csv" onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (!file) return;
-              handleNurseCsvFile(file).catch((error) => showToast(error instanceof Error ? error.message : '看護師CSVの反映に失敗しました。', 'error'));
-              event.currentTarget.value = '';
-            }} />
-            <button onClick={handleClearNurseCsv}>看護師CSV削除</button>
-          </div>
-        </section>
-
+      <section className="scheduler-footer-grid calendar-footer-grid">
         <section className="card panel footer-users-panel">
           <div className="split-line">
             <div>
@@ -2178,6 +2304,8 @@ export default function App() {
 
         <ConfirmedSchedulePanel key={`confirmed-list-${interactionVersion}`} visits={visibleScheduledVisits} nurses={nurses} duplicateUserIds={[...duplicateUserIdsAll]} duplicateUserTooltips={duplicateUserTooltipMapAll} onUpdate={handleUpdateScheduled} onRemove={handleRemoveScheduled} />
       </section>
+        </>
+      )}
     </div>
   );
 }

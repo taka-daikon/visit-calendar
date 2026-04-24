@@ -26,6 +26,25 @@ export interface RawCsvRow {
   書類期限日?: string;
   カラー?: string;
   担当看護師名?: string;
+  入力者?: string;
+  利用者ID?: string;
+  かな?: string;
+  施設名?: string;
+  住所?: string;
+  保険対象?: string;
+  訪問NG日付?: string;
+  訪問NG開始時間?: string;
+  訪問NG終了時間?: string;
+  訪問希望曜日?: string;
+  訪問希望時間帯?: string;
+  女性希望?: string;
+  希望ケア?: string;
+  その他要望?: string;
+  入力日?: string;
+  更新日?: string;
+  利用者確認日?: string;
+  確定の有無?: string;
+  過去履歴訪問NG?: string;
 }
 
 export interface UserRecord extends RawCsvRow {

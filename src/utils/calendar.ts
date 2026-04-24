@@ -47,9 +47,19 @@ export function minutesToTime(minutes: number): string {
   return `${h}:${m}`;
 }
 
+function normalizeTimeRangeText(value: string): string {
+  return String(value ?? '')
+    .trim()
+    .replace(/〜|～|–|—|ー|−|~|～/g, '-')
+    .replace(/時/g, ':')
+    .replace(/分/g, '')
+    .replace(/：/g, ':')
+    .replace(/\s+/g, '');
+}
+
 export function expandTimeRange(range: string): Array<{ start: string; end: string; startMinutes: number; endMinutes: number }> {
   if (!range) return [];
-  return range
+  return normalizeTimeRangeText(range)
     .split('|')
     .map((item) => item.trim())
     .filter(Boolean)
@@ -61,6 +71,51 @@ export function expandTimeRange(range: string): Array<{ start: string; end: stri
       if (Number.isNaN(startMinutes) || Number.isNaN(endMinutes) || startMinutes >= endMinutes) return [];
       return [{ start, end, startMinutes, endMinutes }];
     });
+}
+
+function resolveCommonVisitRange(user: UserRecord, weekday: WeekdayJa): string {
+  const directRange = String(user[TIME_COLUMN_MAP[weekday]] || '').trim();
+  if (directRange) return directRange;
+  return String(user.訪問希望時間帯 || '').trim();
+}
+
+function normalizeDateList(value: string, referenceYear: number): string[] {
+  return String(value ?? '')
+    .split(/[|｜、/／,，\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      const normalized = item.replace(/[.]/g, '/').replace(/年/g, '/').replace(/月/g, '/').replace(/日/g, '').trim();
+      if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(normalized)) {
+        const [y, m, d] = normalized.split(/[-/]/).map(Number);
+        return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      }
+      if (/^\d{1,2}[-/]\d{1,2}$/.test(normalized)) {
+        const [m, d] = normalized.split(/[-/]/).map(Number);
+        return `${referenceYear}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      }
+      return '';
+    })
+    .filter(Boolean);
+}
+
+function overlapsRange(
+  left: { startMinutes: number; endMinutes: number },
+  right: { startMinutes: number; endMinutes: number }
+): boolean {
+  return left.startMinutes < right.endMinutes && right.startMinutes < left.endMinutes;
+}
+
+function blockedByNgRule(user: UserRecord, day: CalendarDay, slot: { startMinutes: number; endMinutes: number }): boolean {
+  const ngDates = normalizeDateList(user.訪問NG日付 || user.過去履歴訪問NG || '', day.date.getFullYear());
+  if (!ngDates.includes(day.dateKey)) return false;
+  const ngStart = String(user.訪問NG開始時間 || '').trim();
+  const ngEnd = String(user.訪問NG終了時間 || '').trim();
+  if (!ngStart || !ngEnd) return true;
+  const ngStartMinutes = timeToMinutes(normalizeTimeRangeText(ngStart));
+  const ngEndMinutes = timeToMinutes(normalizeTimeRangeText(ngEnd));
+  if (Number.isNaN(ngStartMinutes) || Number.isNaN(ngEndMinutes) || ngStartMinutes >= ngEndMinutes) return true;
+  return overlapsRange(slot, { startMinutes: ngStartMinutes, endMinutes: ngEndMinutes });
 }
 
 export function getAreaColors(areas: string[]): Record<string, string> {
@@ -75,10 +130,10 @@ export function buildCandidateVisits(users: UserRecord[], days: CalendarDay[]): 
     const weekday = WEEKDAY_LABELS[day.date.getDay()];
     return users.flatMap((user) => {
       if (!user.hopeDays.includes(weekday)) return [];
-      const timeRange = String(user[TIME_COLUMN_MAP[weekday]] || '').trim();
-      const slots = expandTimeRange(timeRange);
+      const timeRange = resolveCommonVisitRange(user, weekday);
+      const slots = expandTimeRange(timeRange).filter((slot) => !blockedByNgRule(user, day, slot));
       if (!slots.length) return [];
-      const address = String(user.居住地 ?? '').trim();
+      const address = String(user.居住地 ?? user.住所 ?? '').trim();
       const area = extractAreaName(address);
       return slots.map((slot) => {
         const serviceDurationMinutes = Math.max(15, Math.min(DEFAULT_SERVICE_DURATION_MINUTES, slot.endMinutes - slot.startMinutes));
