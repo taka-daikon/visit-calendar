@@ -51,7 +51,7 @@ const BUSINESS_SNAPSHOT_KEY = 'visit-calendar-business-snapshots';
 const SAVED_DRAFTS_KEY = 'visit-calendar-saved-drafts';
 const UI_PAGE_KEY = 'visit-calendar-ui-page';
 
-type UiPage = 'optimize' | 'calendar';
+type UiPage = 'optimize' | 'calendar' | 'directory' | 'logic';
 
 const USER_CSV_HEADERS = EXCEL_USER_TEMPLATE_HEADERS;
 
@@ -522,6 +522,7 @@ export default function App() {
   const [filters, setFilters] = useState<Filters>(() => initialSnapshot?.filters ?? loadFromStorage(FILTERS_KEY, defaultFilters));
   const [viewMode, setViewMode] = useState<ViewMode>(() => initialSnapshot?.viewMode ?? loadFromStorage(VIEW_MODE_KEY, 'month'));
   const [uiPage, setUiPage] = useState<UiPage>(() => loadFromStorage<UiPage>(UI_PAGE_KEY, 'optimize'));
+  const [directoryMode, setDirectoryMode] = useState<'users' | 'workers'>('users');
   const [currentDate, setCurrentDate] = useState<Date>(() => Number.isNaN(initialDate.getTime()) ? loadPersistedDate() : initialDate);
   const [draggedSlotId, setDraggedSlotId] = useState('');
   const [draggedWorkerShiftId, setDraggedWorkerShiftId] = useState('');
@@ -1879,11 +1880,13 @@ export default function App() {
       <section className="card panel page-switch-panel">
         <div>
           <h2>作業ページ</h2>
-          <p className="helper-text">CSV読込と最適化準備は「最適化ページ」、ドラッグ＆ドロップ調整は「カレンダーページ」に分けました。</p>
+          <p className="helper-text">4つの画面をタグ分けし、CSV取込・カレンダー調整・利用者/ワーカー管理・最適化ロジック説明を一つの導線に統一しました。</p>
         </div>
         <div className="page-switch-tabs" role="tablist" aria-label="作業ページ切替">
-          <button type="button" className={`page-switch-tab ${uiPage === 'optimize' ? 'active' : ''}`} onClick={() => setUiPage('optimize')}>最適化ページ</button>
-          <button type="button" className={`page-switch-tab ${uiPage === 'calendar' ? 'active' : ''}`} onClick={() => setUiPage('calendar')}>カレンダーページ</button>
+          <button type="button" className={`page-switch-tab ${uiPage === 'optimize' ? 'active' : ''}`} onClick={() => setUiPage('optimize')}>1. CSVインポート</button>
+          <button type="button" className={`page-switch-tab ${uiPage === 'calendar' ? 'active' : ''}`} onClick={() => setUiPage('calendar')}>2. カレンダー</button>
+          <button type="button" className={`page-switch-tab ${uiPage === 'directory' ? 'active' : ''}`} onClick={() => setUiPage('directory')}>3. 利用者・ワーカー</button>
+          <button type="button" className={`page-switch-tab ${uiPage === 'logic' ? 'active' : ''}`} onClick={() => setUiPage('logic')}>4. 最適化ロジック</button>
         </div>
       </section>
 
@@ -2240,70 +2243,166 @@ export default function App() {
       {unscheduledCandidates.length > 0 && (
         <CandidateList visits={unscheduledCandidates} areaColors={areaColors} onDragStart={setDraggedSlotId} duplicateUserIds={[...duplicateUserIdsAll]} duplicateUserTooltips={duplicateUserTooltipMapAll} />
       )}
+        </>
+      )}
 
-      <section className="scheduler-footer-grid calendar-footer-grid">
-        <section className="card panel footer-users-panel">
-          <div className="split-line">
-            <div>
-              <h2>利用者一覧</h2>
-              <p className="helper-text">担当件数とエリアを確認しながら、カレンダー操作へ戻れます。</p>
-            </div>
-            <span className="badge footer-badge">{users.length}名</span>
-          </div>
-          <div className="compact-list scrollable-list footer-list">
-            {users.length === 0 && <p className="empty">利用者はまだ読み込まれていません。</p>}
-            {users.map((user) => (
-              <article key={user.id} className={`mini-card footer-user-card clickable-card ${duplicateUserIdsAll.has(user.id) ? 'duplicate-user-box' : ''}`} onClick={() => handleOpenUserEditor(user.id)}>
-                <div className="split-line">
-                  <strong>{user.利用者名}</strong>
-                  <div className="footer-user-badges">
-                    {duplicateUserTooltipMap[user.id]?.length ? (
-                      <span className="duplicate-warning-badge" role="note" tabIndex={0}>
-                        ⚠ 重複
-                        <span className="duplicate-warning-tooltip">
-                          {duplicateUserTooltipMap[user.id].map((label) => (
-                            <span key={`${user.id}-${label}`} className="duplicate-warning-tooltip-line">{label}</span>
-                          ))}
-                        </span>
-                      </span>
-                    ) : null}
-                    <span className="badge footer-badge subtle">FIX {scheduledCountByUserId[user.id] ?? 0}</span>
+      {uiPage === 'directory' && (
+        <>
+          <section className="directory-hero-grid">
+            <article className="card panel directory-summary-panel">
+              <div className="split-line optimize-panel-header">
+                <div>
+                  <h2>利用者・ワーカーマスタ管理</h2>
+                  <p className="helper-text">利用者一覧とワーカーマスタを同じデザインで切り替え、編集・CSV反映・復元までを1画面で扱えます。</p>
+                </div>
+                <span className="badge footer-badge">{directoryMode === 'users' ? `${users.length}名` : `${nurses.length}名`}</span>
+              </div>
+              <div className="directory-toggle-tabs" role="tablist" aria-label="利用者ワーカー切替">
+                <button type="button" className={`page-switch-tab ${directoryMode === 'users' ? 'active' : ''}`} onClick={() => setDirectoryMode('users')}>利用者一覧</button>
+                <button type="button" className={`page-switch-tab ${directoryMode === 'workers' ? 'active' : ''}`} onClick={() => setDirectoryMode('workers')}>ワーカー一覧</button>
+              </div>
+              <section className="stats-grid board-summary-grid optimize-summary-grid compact-stats-grid">
+                <article className="stat-card"><span>利用者</span><strong>{users.length}</strong></article>
+                <article className="stat-card"><span>ワーカー</span><strong>{nurses.length}</strong></article>
+                <article className="stat-card"><span>FIX訪問</span><strong>{scheduledVisits.length}</strong></article>
+                <article className="stat-card"><span>重複警告</span><strong>{warnings.length}</strong></article>
+              </section>
+            </article>
+          </section>
+
+          <section className="scheduler-footer-grid calendar-footer-grid">
+            {directoryMode === 'users' ? (
+              <>
+                <section className="card panel footer-users-panel">
+                  <div className="split-line">
+                    <div>
+                      <h2>利用者一覧</h2>
+                      <p className="helper-text">担当件数とエリア、希望曜日を見ながら編集できます。</p>
+                    </div>
+                    <span className="badge footer-badge">{users.length}名</span>
                   </div>
+                  <div className="compact-list scrollable-list footer-list">
+                    {users.length === 0 && <p className="empty">利用者はまだ読み込まれていません。</p>}
+                    {users.map((user) => (
+                      <article key={user.id} className={`mini-card footer-user-card clickable-card ${duplicateUserIdsAll.has(user.id) ? 'duplicate-user-box' : ''}`} onClick={() => handleOpenUserEditor(user.id)}>
+                        <div className="split-line">
+                          <strong>{user.利用者名}</strong>
+                          <div className="footer-user-badges">
+                            {duplicateUserTooltipMap[user.id]?.length ? (
+                              <span className="duplicate-warning-badge" role="note" tabIndex={0}>
+                                ⚠ 重複
+                                <span className="duplicate-warning-tooltip">
+                                  {duplicateUserTooltipMap[user.id].map((label) => (
+                                    <span key={`${user.id}-${label}`} className="duplicate-warning-tooltip-line">{label}</span>
+                                  ))}
+                                </span>
+                              </span>
+                            ) : null}
+                            <span className="badge footer-badge subtle">FIX {scheduledCountByUserId[user.id] ?? 0}</span>
+                          </div>
+                        </div>
+                        <div>{user.居住地}</div>
+                        <div className="card-subtext">{user.保険区分} / 希望: {user.希望曜日 || '未設定'} / 処置: {user.希望処置内容}</div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="card panel footer-users-panel archive-users-panel">
+                  <div className="split-line">
+                    <div>
+                      <h2>利用者バックアップ</h2>
+                      <p className="helper-text">削除済みの利用者を必要な時だけ復元できます。</p>
+                    </div>
+                    <span className="badge footer-badge">{deletedArchivedUsers.length}件</span>
+                  </div>
+                  <div className="compact-list scrollable-list footer-list">
+                    {deletedArchivedUsers.length === 0 && <p className="empty">削除済みのバックアップ利用者はありません。</p>}
+                    {deletedArchivedUsers.map((user) => (
+                      <article key={`archive-${user.id}`} className="mini-card footer-user-card">
+                        <div className="split-line">
+                          <strong>{user.利用者名}</strong>
+                          <button type="button" className="small-action primary-soft" onClick={() => { handleRestoreArchivedUser(user.id).catch((error) => showToast(error instanceof Error ? error.message : 'バックアップ復元に失敗しました。', 'error')); }}>復元</button>
+                        </div>
+                        <div>{user.居住地}</div>
+                        <div className="card-subtext">{user.保険区分} / 希望: {user.希望曜日 || '未設定'} / 担当: {user.担当看護師名 || '未設定'}</div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              </>
+            ) : (
+              <>
+                <NurseMasterPanel nurses={nurses} onToggleActive={handleToggleNurse} onAdd={handleAddNurse} onImportCsv={handleNurseCsvFile} onClearCsv={handleClearNurseCsv} />
+                <ConfirmedSchedulePanel key={`confirmed-list-${interactionVersion}`} visits={visibleScheduledVisits} nurses={nurses} duplicateUserIds={[...duplicateUserIdsAll]} duplicateUserTooltips={duplicateUserTooltipMapAll} onUpdate={handleUpdateScheduled} onRemove={handleRemoveScheduled} />
+              </>
+            )}
+          </section>
+        </>
+      )}
+
+      {uiPage === 'logic' && (
+        <>
+          <section className="logic-hero-grid">
+            <article className="card panel logic-overview-panel">
+              <div className="split-line optimize-panel-header">
+                <div>
+                  <h2>最適化ロジック説明画面</h2>
+                  <p className="helper-text">エリア・訪問NG・希望時間をもとに、利用者ごとの候補を作成し、ワーカー条件と照合して自動割当します。</p>
                 </div>
-                <div>{user.居住地}</div>
-                <div className="card-subtext">{user.保険区分} / 希望: {user.希望曜日 || '未設定'} / 処置: {user.希望処置内容}</div>
-              </article>
-            ))}
-          </div>
-        </section>
+                <span className="badge footer-badge">6ステップ</span>
+              </div>
+              <div className="logic-flow-grid">
+                <article className="logic-step-card">
+                  <span className="logic-step-index">STEP 1</span>
+                  <strong>CSV読込</strong>
+                  <p>利用者CSVとワーカーCSVを取込。添付Excelの1行目をそのままヘッダーとして利用します。</p>
+                </article>
+                <article className="logic-step-card">
+                  <span className="logic-step-index">STEP 2</span>
+                  <strong>エリア判定</strong>
+                  <p>住所から訪問エリアを推定し、近接するワーカーを優先候補にします。</p>
+                </article>
+                <article className="logic-step-card">
+                  <span className="logic-step-index">STEP 3</span>
+                  <strong>訪問NG除外</strong>
+                  <p>訪問NG日付・開始時間・終了時間に重なる候補を除外し、無効な枠を自動で弾きます。</p>
+                </article>
+                <article className="logic-step-card">
+                  <span className="logic-step-index">STEP 4</span>
+                  <strong>希望時間候補生成</strong>
+                  <p>訪問希望曜日と訪問希望時間帯を30分単位の候補に展開します。</p>
+                </article>
+                <article className="logic-step-card">
+                  <span className="logic-step-index">STEP 5</span>
+                  <strong>ワーカー照合</strong>
+                  <p>性別希望・スキル・稼働曜日・訪問可能時間・担当希望を加点し最適な担当を選びます。</p>
+                </article>
+                <article className="logic-step-card logic-step-card-accent">
+                  <span className="logic-step-index">STEP 6</span>
+                  <strong>FIX化と手動調整</strong>
+                  <p>割当結果はカレンダーへ反映され、未割当はアラート表示。ドラッグ＆ドロップで最終調整できます。</p>
+                </article>
+              </div>
+            </article>
 
-        <section className="card panel footer-users-panel archive-users-panel">
-          <div className="split-line">
-            <div>
-              <h2>利用者バックアップ</h2>
-              <p className="helper-text">現在の事業所で削除済みになった利用者だけを表示しています。復元前には確認ダイアログが表示されます。</p>
-            </div>
-            <span className="badge footer-badge">{deletedArchivedUsers.length}件</span>
-          </div>
-          <div className="compact-list scrollable-list footer-list">
-            {deletedArchivedUsers.length === 0 && <p className="empty">削除済みのバックアップ利用者はありません。</p>}
-            {deletedArchivedUsers.map((user) => (
-              <article key={`archive-${user.id}`} className="mini-card footer-user-card">
-                <div className="split-line">
-                  <strong>{user.利用者名}</strong>
-                  <button type="button" className="small-action primary-soft" onClick={() => { handleRestoreArchivedUser(user.id).catch((error) => showToast(error instanceof Error ? error.message : 'バックアップ復元に失敗しました。', 'error')); }}>復元</button>
-                </div>
-                <div>{user.居住地}</div>
-                <div className="card-subtext">{user.保険区分} / 希望: {user.希望曜日 || '未設定'} / 担当: {user.担当看護師名 || '未設定'}</div>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <NurseMasterPanel nurses={nurses} onToggleActive={handleToggleNurse} onAdd={handleAddNurse} onImportCsv={handleNurseCsvFile} onClearCsv={handleClearNurseCsv} />
-
-        <ConfirmedSchedulePanel key={`confirmed-list-${interactionVersion}`} visits={visibleScheduledVisits} nurses={nurses} duplicateUserIds={[...duplicateUserIdsAll]} duplicateUserTooltips={duplicateUserTooltipMapAll} onUpdate={handleUpdateScheduled} onRemove={handleRemoveScheduled} />
-      </section>
+            <article className="card panel logic-side-panel">
+              <h2>現在データでの判定サマリー</h2>
+              <div className="logic-metric-list">
+                <div className="logic-metric-item"><span>利用者CSV読込件数</span><strong>{users.length}件</strong></div>
+                <div className="logic-metric-item"><span>ワーカー登録件数</span><strong>{nurses.length}件</strong></div>
+                <div className="logic-metric-item"><span>訪問NG指定あり</span><strong>{users.filter((user) => String(user.訪問NG日付 || '').trim()).length}件</strong></div>
+                <div className="logic-metric-item"><span>希望時間指定あり</span><strong>{users.filter((user) => String(user.訪問希望時間帯 || '').trim()).length}件</strong></div>
+                <div className="logic-metric-item"><span>自動割当済みFIX</span><strong>{scheduledVisits.length}件</strong></div>
+                <div className="logic-metric-item"><span>未割当アラート</span><strong>{unscheduledCandidates.length}件</strong></div>
+              </div>
+              <ul className="warning-list optimize-note-list logic-note-list">
+                <li>エリア一致・同住所・希望担当は加点</li>
+                <li>訪問NG・時間重複・移動バッファ不足は除外または減点</li>
+                <li>最終結果はカレンダーページで日別に確認</li>
+              </ul>
+            </article>
+          </section>
         </>
       )}
     </div>
